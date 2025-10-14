@@ -7,7 +7,7 @@ from typing import Any, Optional
 import numpy as np
 import scipy.stats as stats
 from numpy.typing import NDArray
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 log = logging.getLogger()
 
@@ -189,33 +189,6 @@ class Metrics(BaseModel):
                     self.nse[i] = self.r2[i] = self._nse_r2(pred, target, _target_mean)
 
         return super().model_post_init(__context)
-
-    @model_validator(mode='after')
-    @classmethod
-    def validate_pred(cls, metrics: Any) -> Any:
-        """Checks that there are no NaN predictions.
-
-        Parameters
-        ----------
-        metrics : Any
-            Metrics object.
-
-        Raises
-        ------
-        ValueError
-            If there are NaN predictions.
-
-        Returns
-        -------
-        Any
-            Metrics object.
-        """
-        pred = metrics.pred
-        if np.isnan(pred).sum() > 0:
-            msg = "Pred contains NaN, check your gradient chain"
-            log.exception(msg)
-            raise ValueError(msg)
-        return metrics
 
     def calc_stats(self, *args, **kwargs) -> dict[str, dict[str, float]]:
         """Calculate aggregate statistics of metrics."""
