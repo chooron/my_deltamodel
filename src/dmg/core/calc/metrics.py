@@ -11,5 +11,5 @@ from numpy.typing import NDArray
 log = logging.getLogger()
 
 
-class Metrics(BaseModel):
+class Metrics():
     pass
