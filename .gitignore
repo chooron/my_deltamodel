@@ -202,3 +202,4 @@ cache
 *.md
 
 !README.md
+!data/README.md
