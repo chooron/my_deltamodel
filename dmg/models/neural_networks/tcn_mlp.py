@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from pytorch_tcn import TCN
 
 from dmg.models.neural_networks.layers.ann import AnnModel
+from dmg.models.neural_networks.layers.ema import ExponentialMovingAverage
 
 
 class TcnMlpModel(torch.nn.Module):
@@ -70,8 +71,9 @@ class TcnMlpModel(torch.nn.Module):
                 output_activation=None,
             ),
         )
-        self.ln = nn.LayerNorm(hiddeninv1)
+        self.norm = nn.RMSNorm(hiddeninv1)
         self.tncdrop = nn.Dropout(dr1)
+        self.ema = ExponentialMovingAverage(channels=hiddeninv1)
         self.a = 0.2
         self.fc = nn.Linear(hiddeninv1, ny1)
         self.ann = AnnModel(
@@ -104,7 +106,7 @@ class TcnMlpModel(torch.nn.Module):
         tcn_out = self.tcninv(
             z1.permute(1, 0, 2)
         )  # dim: timesteps, gages, params
-        tcn_out = self.ln(tcn_out)
-        fc_out = self.fc(self.tncdrop(tcn_out).permute(1, 0, 2))
+        ema_out = self.ema(self.norm(tcn_out))
+        fc_out = self.fc(self.tncdrop(ema_out).permute(1, 0, 2))
         ann_out = self.ann(z2)
         return F.sigmoid(fc_out*self.a), F.sigmoid(ann_out)

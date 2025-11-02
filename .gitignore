@@ -192,3 +192,7 @@ LOG.md
 logs
 
 *.ckpt
+
+cache
+
+*.pt
