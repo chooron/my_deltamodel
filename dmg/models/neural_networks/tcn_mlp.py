@@ -50,7 +50,7 @@ class TcnMlpModel(torch.nn.Module):
         device: Optional[str] = "cpu",
     ) -> None:
         super().__init__()
-        self.name = "LstmMlpModel"
+        self.name = "TcnMlpModel"
 
         self.tcninv = nn.Sequential(
             nn.Linear(nx1, hiddeninv1),
@@ -71,7 +71,7 @@ class TcnMlpModel(torch.nn.Module):
                 output_activation=None,
             ),
         )
-        self.norm = nn.RMSNorm(hiddeninv1)
+        self.norm = nn.LayerNorm(hiddeninv1)
         self.tncdrop = nn.Dropout(dr1)
         self.ema = ExponentialMovingAverage(channels=hiddeninv1)
         self.a = 0.2
@@ -107,6 +107,7 @@ class TcnMlpModel(torch.nn.Module):
             z1.permute(1, 0, 2)
         )  # dim: timesteps, gages, params
         ema_out = self.ema(self.norm(tcn_out))
+        # ema_out = self.norm(tcn_out)
         fc_out = self.fc(self.tncdrop(ema_out).permute(1, 0, 2))
         ann_out = self.ann(z2)
-        return F.sigmoid(fc_out*self.a), F.sigmoid(ann_out)
+        return 0.5 * (torch.tanh(fc_out * self.a) + 1), F.sigmoid(ann_out)
