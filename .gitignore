@@ -199,6 +199,6 @@ cache
 
 .png
 
-*md
+*.md
 
 !README.md
