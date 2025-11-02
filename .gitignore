@@ -198,3 +198,7 @@ cache
 *.pt
 
 .png
+
+*md
+
+!README.md
