@@ -121,13 +121,12 @@ class Trainer(BaseTrainer):
             Initialized optimizer object.
         """
         name = self.config['train']['optimizer']
-        learning_rate = self.config['delta_model']['nn_model']['learning_rate']
         optimizer_dict = {
             # 'SGD': torch.optim.SGD,
-            # 'Adam': torch.optim.Adam,
-            # 'AdamW': torch.optim.AdamW,
+            'Adam': torch.optim.Adam,
+            'AdamW': torch.optim.AdamW,
             'Adadelta': torch.optim.Adadelta,
-            # 'RMSprop': torch.optim.RMSprop,
+            'RMSprop': torch.optim.RMSprop,
         }
 
         # Fetch optimizer class
@@ -138,9 +137,11 @@ class Trainer(BaseTrainer):
 
         # Initialize
         try:
+            print(self.config['train'].get('weight_decay', 0.0))
             self.optimizer = cls(
                 self.model.get_parameters(),
-                lr=learning_rate,
+                lr=self.config['train']['learning_rate'],
+                weight_decay=self.config['train'].get('weight_decay', 0.0)
             )
         except RuntimeError as e:
             raise RuntimeError(f"Error initializing optimizer: {e}") from e
@@ -156,7 +157,7 @@ class Trainer(BaseTrainer):
         scheduler_dict = {
             'StepLR': torch.optim.lr_scheduler.StepLR,
             'ExponentialLR': torch.optim.lr_scheduler.ExponentialLR,
-            # 'ReduceLROnPlateau': torch.optim.lr_scheduler.ReduceLROnPlateau,
+            'ReduceLROnPlateau': torch.optim.lr_scheduler.ReduceLROnPlateau,
             'CosineAnnealingLR': torch.optim.lr_scheduler.CosineAnnealingLR,
         }
 
@@ -265,6 +266,11 @@ class Trainer(BaseTrainer):
             loss = self.model.calc_loss(dataset_sample)
 
             loss.backward()
+            
+            # if self.config['train'].get('clip_grad_norm', False):
+            #     # Add gradient clipping here
+            #     torch.nn.utils.clip_grad_norm_(self.model.get_parameters(), max_norm=1.0)
+            
             self.optimizer.step()
             self.optimizer.zero_grad()
 

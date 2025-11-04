@@ -42,6 +42,7 @@ train:
     epochs: 100
     start_epoch: 0
     save_epoch: 1
+    clip_grad_norm: True
 
 
 ## Evaluation -------------------------------#

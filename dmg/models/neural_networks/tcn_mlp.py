@@ -6,7 +6,10 @@ import torch.nn.functional as F
 from pytorch_tcn import TCN
 
 from dmg.models.neural_networks.layers.ann import AnnModel
-from dmg.models.neural_networks.layers.ema import ExponentialMovingAverage
+from dmg.models.neural_networks.layers.ema import (
+    ExponentialMovingAverage,
+    SimpleMovingAverage,
+)
 
 
 class TcnMlpModel(torch.nn.Module):
@@ -56,11 +59,11 @@ class TcnMlpModel(torch.nn.Module):
             nn.Linear(nx1, hiddeninv1),
             TCN(
                 num_inputs=hiddeninv1,
-                num_channels=[hiddeninv1] * 8,
-                kernel_size=4,
+                num_channels=[hiddeninv1] * 4,
+                kernel_size=3,
                 dilations=None,
                 dilation_reset=None,
-                dropout=0.1,
+                dropout=0.2,
                 causal=True,
                 use_norm="weight_norm",
                 activation="leaky_relu",
@@ -73,8 +76,11 @@ class TcnMlpModel(torch.nn.Module):
         )
         self.norm = nn.LayerNorm(hiddeninv1)
         self.tncdrop = nn.Dropout(dr1)
-        self.ema = ExponentialMovingAverage(channels=hiddeninv1)
-        self.a = 0.2
+        # self.ema = ExponentialMovingAverage(channels=hiddeninv1, learnable=False)
+        self.ema = SimpleMovingAverage(
+            channels=hiddeninv1, kernel_size=7, per_channel=True
+        )
+        self.a = 0.5
         self.fc = nn.Linear(hiddeninv1, ny1)
         self.ann = AnnModel(
             nx=nx2,
@@ -82,15 +88,15 @@ class TcnMlpModel(torch.nn.Module):
             hidden_size=hiddeninv2,
             dr=dr2,
         )
-    
+
     @classmethod
     def build_by_config(cls, config, device):
         return cls(
-            nx1=config['nx'],
-            ny1=config['ny1'],
+            nx1=config["nx"],
+            ny1=config["ny1"],
             hiddeninv1=config["tcn_hidden_size"],
-            nx2=config['nx2'],
-            ny2=config['ny2'],
+            nx2=config["nx2"],
+            ny2=config["ny2"],
             hiddeninv2=config["mlp_hidden_size"],
             dr1=config["tcn_dropout"],
             dr2=config["mlp_dropout"],
@@ -99,10 +105,10 @@ class TcnMlpModel(torch.nn.Module):
 
     def forward(
         self,
-        data_dict:dict,
+        data_dict: dict,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        z1 = data_dict['xc_nn_norm']
-        z2 = data_dict['c_nn_norm']
+        z1 = data_dict["xc_nn_norm"]
+        z2 = data_dict["c_nn_norm"]
         tcn_out = self.tcninv(
             z1.permute(1, 0, 2)
         )  # dim: timesteps, gages, params

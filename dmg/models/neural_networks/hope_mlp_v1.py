@@ -1,6 +1,7 @@
 from typing import Optional
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 from dmg.models.neural_networks.layers.ann import AnnModel
@@ -46,6 +47,11 @@ class HopeMlpV1(torch.nn.Module):
                 "out_activation": "glu",
             },
         )
+        self.a = 0.5
+        self.norm = nn.LayerNorm(hiddeninv1)
+        self.ma = SimpleMovingAverage(
+            channels=hiddeninv1, kernel_size=7, per_channel=True
+        )
         self.ann = AnnModel(
             nx=nx2,
             ny=ny2,
@@ -75,7 +81,7 @@ class HopeMlpV1(torch.nn.Module):
             torch.permute(z1, (1, 0, 2))
         )  # dim: timesteps, gages, params
         ann_out = self.ann(z2)
-        hope_out = F.sigmoid(hope_out.permute(1, 0, 2))
+        hope_out = (F.tanh(hope_out.permute(1, 0, 2)) + 1) / 2
         ann_out = F.sigmoid(ann_out)
         # print(hope_out.shape, ann_out.shape)
         return hope_out, ann_out

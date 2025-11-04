@@ -78,8 +78,7 @@ class S4DKernel(nn.Module):
 
         # print("S4D kernel: N = ", N, cfi, cfr)
 
-        # log_A_real = torch.log(0.5 * torch.ones(H, N // 2)) * cfr # config v1
-        log_A_real = torch.log(0.1 * torch.ones(H, N // 2)) * cfr # config v2
+        log_A_real = torch.log(0.5 * torch.ones(H, N // 2)) * cfr # config v1
         A_imag = math.pi * repeat(torch.arange(N // 2), "n -> h n", h=H) * cfi
         self.register("log_A_real", log_A_real, lr)
         self.register("A_imag", A_imag, lr)
@@ -213,11 +212,11 @@ class Hope(nn.Module):
     def __init__(
         self,
         input_size,
-        output_size=1,
         hidden_size=256,
         n_layers=2,  # 4 -> 3
         dropout=0.1,
         cfg=None,
+        output_size=None,
         prenorm=False,
     ):
         super().__init__()
@@ -274,7 +273,10 @@ class Hope(nn.Module):
             self.dropouts.append(dropout_fn(dropout))
 
         # Linear decoder
-        self.decoder = nn.Linear(hidden_size, output_size)
+        if output_size is None:
+            self.decoder = nn.Identity()
+        else:
+            self.decoder = nn.Linear(hidden_size, output_size)
         # self.lnorm = torch.nn.LayerNorm(365)
         # self.att = SelfAttentionLayer(365) #20240626 remove attention
 

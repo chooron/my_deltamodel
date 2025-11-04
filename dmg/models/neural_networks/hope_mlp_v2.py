@@ -6,20 +6,11 @@ import torch.nn.functional as F
 
 from dmg.models.neural_networks.layers.ann import AnnModel
 from dmg.models.neural_networks.layers.hope import Hope
+from dmg.models.neural_networks.layers.ema import (
+    ExponentialMovingAverage,
+    SimpleMovingAverage,
+)
 
-class GaussianSmoother(nn.Module):
-    def __init__(self, channels, kernel_size=9, sigma=2.0):
-        super().__init__()
-        half = kernel_size // 2
-        x = torch.arange(-half, half + 1).float()
-        k = torch.exp(-0.5 * (x / sigma) ** 2)
-        k = k / k.sum()
-        k = k.view(1, 1, kernel_size).repeat(channels, 1, 1)
-        self.register_buffer("kernel", k)
-
-    def forward(self, x):  # x: (B, C, L)
-        pad = self.kernel.size(-1) // 2
-        return F.conv1d(x, self.kernel, padding=pad, groups=x.size(1))
 
 class HopeMlpV2(torch.nn.Module):
     def __init__(
@@ -44,22 +35,26 @@ class HopeMlpV2(torch.nn.Module):
             "min_dt": 0.001,
             "max_dt": 0.01,  # change to 0.01
             "wd": 0.01,  # change to 0.01
-            "d_state": 64,
-            "cfr": 1.0,
-            "cfi": 1.0,
+            "d_state": 256,
+            "cfr": 1.2,
+            "cfi": 0.8,
             "use_gated": False,
             "out_activation": 'glu',
         }
         self.hope_layer = Hope(
             input_size=nx1,
-            output_size=ny1,
             hidden_size=hiddeninv1,
             dropout=dr1,
             cfg=config,
-            prenorm=True,
-            n_layers=2,
+            prenorm=False,
+            n_layers=3,
         )
-        self.smoother = GaussianSmoother(channels=output_size, kernel_size=15, sigma=2.0)
+        self.fc = nn.Linear(hiddeninv1, ny1, bias=True)
+        # self.norm = nn.LayerNorm(hiddeninv1)
+        # self.ma = SimpleMovingAverage(
+        #     channels=hiddeninv1, kernel_size=11, per_channel=True
+        # )
+        # self.a = 0.5
         self.ann = AnnModel(
             nx=nx2,
             ny=ny2,
@@ -68,44 +63,30 @@ class HopeMlpV2(torch.nn.Module):
         )
 
     @classmethod
-    def build_by_config(cls, config):
+    def build_by_config(cls, config: dict, device: Optional[str] = "cpu"):
         return cls(
-            nx1=config["nn_model"]["nx1"],
-            ny1=config["nn_model"]["ny1"],
-            hiddeninv1=config["nn_model"]["hope_hidden_size"],
-            nx2=config["nn_model"]["nx2"],
-            ny2=config["nn_model"]["ny2"],
-            hiddeninv2=config["nn_model"]["mlp_hidden_size"],
-            dr1=config["nn_model"]["hope_dropout"],
-            dr2=config["nn_model"]["mlp_dropout"],
-            device=config["nn_model"]["device"],
+            nx1=config["nx"],
+            nx2=config["nx2"],
+            ny1=config["ny1"],
+            ny2=config["ny2"],
+            hiddeninv1=config["hope_hidden_size"],
+            hiddeninv2=config["mlp_hidden_size"],
+            dr1=config["hope_dropout"],
+            dr2=config["mlp_dropout"],
+            device=device,
         )
+        
 
     def forward(
         self,
-        z1: torch.Tensor,
-        z2: torch.Tensor,
+        data_dict: dict,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass.
-
-        Parameters
-        ----------
-        z1
-            The LSTM input tensor.
-        z2
-            The MLP input tensor.
-
-        Returns
-        -------
-        tuple
-            The LSTM and MLP output tensors.
-        """
+        z1 = data_dict["xc_nn_norm"]
+        z2 = data_dict["c_nn_norm"]
         hope_out = self.hope_layer(
             torch.permute(z1, (1, 0, 2))
-        )  # dim: timesteps, gages, params
+        ).permute((1, 0, 2))  # dim: timesteps, gages, params
+        # fc_out = self.fc(self.ma(self.norm(hope_out)))
+        fc_out = self.fc(hope_out)
         ann_out = self.ann(z2)
-        hope_out = F.sigmoid(hope_out)
-        hope_out = self.smoother(hope_out.transpose(1, 2)).transpose(1, 2)
-        ann_out = F.sigmoid(ann_out)
-        # print(hope_out.shape, ann_out.shape)
-        return torch.permute(hope_out, (1, 0, 2)), ann_out
+        return (F.tanh(fc_out) + 1) / 2, F.sigmoid(ann_out)
