@@ -12,7 +12,9 @@ def plot_baseflow_scatter(
     fontsize_ticks=12,
     fontsize_legend=12,
     axis_linewidth=1.5,
-    output_path=None
+    alpha=0.6,
+    output_path=None,
+    ax=None,
 ):
     """
     绘制观测与模拟基流指数的科研风格散点图。
@@ -41,14 +43,15 @@ def plot_baseflow_scatter(
     corr_hopev1, _ = pearsonr(hopev1_baseflow, real_baseflow)
     
     # --- 2. 创建画布和坐标轴 ---
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
     
     # --- 3. 绘制散点图 ---
     # LSTM
     ax.scatter(
         real_baseflow, 
         lstm_baseflow, 
-        alpha=0.6, 
+        alpha=alpha, 
         color='blue', 
         marker='o',  # 圆形
         label=f'LSTM ($R$ = {corr_lstm:.2f})'
@@ -58,7 +61,7 @@ def plot_baseflow_scatter(
     ax.scatter(
         real_baseflow, 
         hopev1_baseflow, 
-        alpha=0.6, 
+        alpha=alpha, 
         color='red', 
         marker='s',  # 方形
         label=f'Hopev1 ($R$ = {corr_hopev1:.2f})'
@@ -110,13 +113,3 @@ def plot_baseflow_scatter(
         top=True,
         right=True
     )
-    
-    # 确保布局紧凑
-    plt.tight_layout()
-    
-    # --- 8. 保存或显示 ---
-    if output_path:
-        print(f"Saving figure to {output_path}...")
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    
-    plt.show()

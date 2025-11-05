@@ -85,3 +85,8 @@ class LstmMlpModel(torch.nn.Module):
         fc_out = self.fc(lstm_out)
         ann_out = self.ann(z2)
         return F.sigmoid(fc_out), F.sigmoid(ann_out)
+
+    def predict_timevar_parameters(self, z1):
+        lstm_out, _ = self.lstminv(z1)  # dim: timesteps, gages, params
+        fc_out = self.fc(lstm_out)
+        return F.sigmoid(fc_out).reshape(-1, 3, 16)

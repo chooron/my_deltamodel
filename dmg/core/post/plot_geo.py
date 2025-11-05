@@ -1,7 +1,46 @@
+import os
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import geopandas as gpd
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+from ..data import txt_to_array
+
+def fetch_geo_data(config):
+    DATA_PATH = os.getenv("DATA_PATH")
+    GAGE_ID_PATH = os.path.join(DATA_PATH, "gage_id.npy")
+    GAGE_ID_531_PATH = os.path.join(DATA_PATH, "531sub_id.txt")
+    SHAPEFILE_PATH = os.path.join(DATA_PATH, "camels_loc", "camels_671_loc.shp")
+    # ------------------------------------------#
+
+    # 1. Load gage ids + basin shapefile with geocoordinates (lat, long) for every gage.
+    gage_ids = np.load(GAGE_ID_PATH, allow_pickle=True)
+    gage_ids_531 = txt_to_array(GAGE_ID_531_PATH)
+    coords = gpd.read_file(SHAPEFILE_PATH)
+
+    # 2. Format geocoords for 531- and 671-basin CAMELS sets.
+    coords_531 = coords[coords["gage_id"].isin(list(gage_ids_531))].copy()
+
+    coords["gage_id"] = pd.Categorical(
+        coords["gage_id"], categories=list(gage_ids), ordered=True
+    )
+    coords_531["gage_id"] = pd.Categorical(
+        coords_531["gage_id"], categories=list(gage_ids_531), ordered=True
+    )
+
+    coords = coords.sort_values("gage_id")  # Sort to match order of metrics.
+
+    # 4. Add the evaluation metrics to the basin shapefile.
+    if config["observations"]["name"] == "camels_671":
+        full_data = coords
+    elif config["observations"]["name"] == "camels_531":
+        full_data = coords_531
+    else:
+        raise ValueError(
+            f"Observation data supported: 'camels_671' or 'camels_531'. Got: {config['observations']}"
+        )
+    return full_data
 
 def geoplot_single_metric(
         gdf: gpd.GeoDataFrame,
@@ -16,6 +55,9 @@ def geoplot_single_metric(
         ax=None,
         cax_pos=[0.83, 0.07, 0.16, 0.03],
         cmap="RdBu",
+        fontsize=16,
+        alpha=0.8,
+        labelsize=14,
         vmin=0,
         vmax=1,
 ):
@@ -92,7 +134,7 @@ def geoplot_single_metric(
         s=marker_size,
         marker=marker,
         cmap=cmap,
-        alpha=0.8,
+        alpha=alpha,
         edgecolor='none',
         transform=ccrs.PlateCarree(),
         vmin=(None if dynamic_colorbar else vmin),
@@ -109,6 +151,6 @@ def geoplot_single_metric(
     # Create the colorbar using the new inset axes (cax).
     cbar = fig.colorbar(scatter, cax=cax, orientation='horizontal')
     cbar.ax.tick_params(labelsize=14)
-    cbar.set_label(title, fontsize=16, labelpad=-45)  # 使用 labelpad 调整标题位置
+    cbar.set_label(title, fontsize=fontsize, labelpad=-45)  # 使用 labelpad 调整标题位置
     # --- End of Modification ---
     return fig, ax

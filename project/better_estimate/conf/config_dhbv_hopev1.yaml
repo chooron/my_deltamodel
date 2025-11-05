@@ -38,6 +38,11 @@ train:
     end_time: 1995/09/30
     target: [streamflow]
     optimizer: Adadelta
+    learning_rate: 1.0
+    lr_scheduler: None
+    lr_scheduler_params:
+        step_size: 10
+        gamma: 0.5
     batch_size: 100
     epochs: 100
     start_epoch: 0
@@ -100,13 +105,8 @@ delta_model:
         model: HopeMlpV1
         mlp_dropout: 0.5
         hope_dropout: 0.2
-        hope_hidden_size: 128
+        hope_hidden_size: 256
         mlp_hidden_size: 256
-        learning_rate: 1.0
-        lr_scheduler: None
-        lr_scheduler_params:
-            step_size: 10
-            gamma: 0.5
         
         forcings: [
             prcp,

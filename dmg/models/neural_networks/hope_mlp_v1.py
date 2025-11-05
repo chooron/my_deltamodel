@@ -47,11 +47,6 @@ class HopeMlpV1(torch.nn.Module):
                 "out_activation": "glu",
             },
         )
-        self.a = 0.5
-        self.norm = nn.LayerNorm(hiddeninv1)
-        self.ma = SimpleMovingAverage(
-            channels=hiddeninv1, kernel_size=7, per_channel=True
-        )
         self.ann = AnnModel(
             nx=nx2,
             ny=ny2,
@@ -64,24 +59,31 @@ class HopeMlpV1(torch.nn.Module):
         return cls(
             nx1=config["nx"],
             nx2=config["nx2"],
-            ny=config["ny"],
-            hiddeninv1=config["lstm_hidden_size"],
-            hiddeninv2=config["fc_hidden_size"],
-            dr1=config["dr1"],
+            ny1=config["ny1"],
+            ny2=config["ny2"],
+            hiddeninv1=config["hope_hidden_size"],
+            hiddeninv2=config["mlp_hidden_size"],
+            dr1=config["hope_dropout"],
+            dr2=config["mlp_dropout"],
             device=device,
         )
-        
+
     def forward(
         self,
-        data_dict:dict,
+        data_dict: dict,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        z1 = data_dict['xc_nn_norm']
-        z2 = data_dict['c_nn_norm']
-        hope_out = self.hope_layer(
-            torch.permute(z1, (1, 0, 2))
-        )  # dim: timesteps, gages, params
+        z1 = data_dict["xc_nn_norm"]
+        z2 = data_dict["c_nn_norm"]
+        hope_out = self.hope_layer(torch.permute(z1, (1, 0, 2))).permute(
+            1, 0, 2
+        )
         ann_out = self.ann(z2)
-        hope_out = (F.tanh(hope_out.permute(1, 0, 2)) + 1) / 2
+        hope_out = F.sigmoid(hope_out)
         ann_out = F.sigmoid(ann_out)
-        # print(hope_out.shape, ann_out.shape)
         return hope_out, ann_out
+
+    def predict_timevar_parameters(self, z1):
+        hope_out = self.hope_layer(torch.permute(z1, (1, 0, 2))).permute(
+            1, 0, 2
+        )
+        return F.sigmoid(hope_out).reshape(-1, 3, 16)

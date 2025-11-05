@@ -15,6 +15,7 @@ def plot_cdf(
         ybounds: tuple = (0, 1.02),
         show_arrow: bool = False,
         show_median_label: bool = True,
+        show_legend: bool = True,
         # --- NEW PARAMETERS ---
         show_count_label: bool = False,
         count_threshold: float = 0.6,
@@ -76,8 +77,9 @@ def plot_cdf(
     if show_median_label:
         ax.text(ax.get_xlim()[1], 0.5, ' 0.5', va='center', ha='left', fontsize=ticksize, color='black')
 
-    if ax.get_legend_handles_labels()[0]:
-        ax.legend(loc="best", fontsize=legend_fontsize)
+    if show_legend:
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(loc="best", fontsize=legend_fontsize)
 
     ax.grid(True, which='major', linestyle='--', linewidth=0.7, color='#666666', alpha=0.7)
     ax.tick_params(axis='both', which='major', labelsize=ticksize, width=axis_width, )
