@@ -9,7 +9,7 @@ import tqdm
 from numpy.typing import NDArray
 
 from dmg.core.calc.metrics import Metrics
-from dmg.core.data import create_training_grid
+from dmg.core.data import create_training_grid, create_dl_training_grid
 from dmg.core.utils.factory import import_data_sampler, load_criterion
 from dmg.core.utils.utils import save_outputs, save_train_state
 from dmg.models.model_handler import ModelHandler
@@ -214,10 +214,17 @@ class Trainer(BaseTrainer):
         self.is_in_train = True
 
         # Setup a training grid (number of samples, minibatches, and timesteps)
-        n_samples, n_minibatch, n_timesteps = create_training_grid(
-            self.train_dataset['xc_nn_norm'],
-            self.config,
-        )
+        # 根据 data_sampler 类型选择合适的训练网格计算函数
+        if self.config.get('data_sampler') == 'DlSampler':
+            n_samples, n_minibatch, n_timesteps = create_dl_training_grid(
+                self.train_dataset['xc_nn_norm'],
+                self.config,
+            )
+        else:
+            n_samples, n_minibatch, n_timesteps = create_training_grid(
+                self.train_dataset['xc_nn_norm'],
+                self.config,
+            )
 
         log.info(f"Training model: Beginning {self.start_epoch} of {self.epochs} epochs")
 

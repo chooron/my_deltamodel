@@ -37,18 +37,16 @@ train:
     start_time: 1980/10/01
     end_time: 1995/09/30
     target: [streamflow]
-    optimizer: AdamW
-    clip_grad_norm: False
-    weight_decay: 0.001
-    batch_size: 100
-    epochs: 100
-    start_epoch: 0
-    save_epoch: 1
-    learning_rate: 0.01
+    optimizer: Adadelta
+    learning_rate: 1.0
     lr_scheduler: None
     lr_scheduler_params:
         step_size: 10
         gamma: 0.5
+    batch_size: 100
+    epochs: 100
+    start_epoch: 0
+    save_epoch: 5
 
 
 ## Evaluation -------------------------------#
@@ -58,7 +56,7 @@ test:
     # start_time: 1980/10/01
     # end_time: 1995/09/30
     batch_size: 100
-    test_epoch: 50
+    test_epoch: 100
     split_dataset: True
 
 ## Inference -------------------------------#
@@ -106,8 +104,8 @@ delta_model:
     nn_model:
         model: HopeMlpV2
         mlp_dropout: 0.5
-        hope_dropout: 0.5
-        hope_hidden_size: 128
+        hope_dropout: 0.2
+        hope_hidden_size: 256
         mlp_hidden_size: 256
         
         forcings: [

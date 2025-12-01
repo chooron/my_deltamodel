@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import string
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -73,14 +74,16 @@ def get_timevar_parameters(
 
 lstm_config = load_config(r"conf/config_dhbv_lstm.yaml")
 hope_config = load_config(r"conf/config_dhbv_hopev1.yaml")
-select_idx = (0, 730 * 2)
-start_time = datetime(1995, 10, 1) + timedelta(days=365 + select_idx[0])
+# basin_id = 1466500 # 2983-730*2:2983
+# select_idx = (2983-730, 2983)
+basin_id = 6431500 # 4810-730*2:4810
+select_idx = (4810-730, 4810)
+start_time = datetime(1995, 10, 1) + timedelta(days=select_idx[0])
 time_range = pd.date_range(
     start_time, freq="d", periods=select_idx[1] - select_idx[0]
 )
 # basin_id = 4105700
 # basin_id = 6409000
-basin_id = 1466500
 lstm_timevar_params = get_timevar_parameters(
     lstm_config, 100, basin_id, select_idx=select_idx
 )
@@ -108,33 +111,59 @@ hope_timevar_params_denormalized = hope_timevar_params_denormalized[
 ]
 
 fig, axes = plt.subplots(
-    nrows=3, ncols=2, figsize=(20, 10), constrained_layout=True
+    nrows=3, ncols=2, figsize=(16, 10), constrained_layout=True
 )
 plot_parameters(
     lstm_timevar_params_denormalized,
-    titles=["parBETA", "parBETAET", "parK1"],
+    titles=[r"$\beta$", r"$\gamma$", r"$K_0$"],
     median_color="#5B84B1FF",
     fig=fig,
     ts=time_range,
     axes=axes[:, 0],
-    label_fontsize=16,
-    tick_fontsize=14,
+    label_fontsize=20,
+    tick_fontsize=18,
+    legend_fontsize=20,
     smooth_method="moving_average",
     window=1,
+    model_name=r'$\delta MG_{\mathrm{LSTM}}$',
+    legend_pos='top-right'
 )
 plot_parameters(
     hope_timevar_params_denormalized,
-    titles=["parBETA", "parBETAET", "parK1"],
+    titles=[r"$\beta$", r"$\gamma$", r"$K_0$"],
     median_color="#D94F4FFF",
     fig=fig,
     ts=time_range,
     axes=axes[:, 1],
-    label_fontsize=16,
-    tick_fontsize=14,
+    label_fontsize=20,
+    tick_fontsize=18,
+    legend_fontsize=20,
     smooth_method="moving_average",
     show_ylabel=False,
-    window=5,
+    window=1,
+    model_name=r'$\delta MG_{\mathrm{S4D}}$',
+    legend_pos='top-left'
 )
+for i, ax in enumerate(axes.flat):
+    # 生成序号：(a), (b), (c)...
+    label = f"({string.ascii_lowercase[i]})"
+    
+    ax.text(
+        0.02, 0.95,          # x, y 位置：0.02是靠左，0.95是靠上 (相对于图框)
+        label,
+        transform=ax.transAxes, # 使用相对坐标系 (0到1)
+        fontsize=20,            # 字体大小，通常比 tick_fontsize 大一点
+        fontweight='bold',      # 加粗更醒目
+        va='top',               # 垂直对齐：顶部对齐
+        ha='left',              # 水平对齐：左对齐
+        zorder=100,              # 确保文字在最上层
+        bbox=dict(
+            facecolor='white',  # 背景颜色
+            alpha=0.8,          # 透明度 0.8
+            edgecolor='none',   # 无边框线 (如果你想要黑框，这里改成 'black')
+            boxstyle='round,pad=0.2' # 可选：圆角矩形，pad控制文字周围留白大小
+        )
+    )
 fig.savefig(
     os.path.join(
         os.getenv("PROJ_PATH"),

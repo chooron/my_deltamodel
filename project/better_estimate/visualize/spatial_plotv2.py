@@ -72,34 +72,13 @@ fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(16, 9),
 # 5. Plot the evaluation results spatially.
 geoplot_single_metric(nse_diff, 'nse', ax=axes[0],
                       vmin=-0.2, vmax=0.2, cmap=custom_cmap1, marker='^',
-                      title="NSE Difference", cax_pos=[0.80, 0.07, 0.18, 0.03])
+                      cbar_title="NSE Difference", cax_pos=[0.80, 0.07, 0.18, 0.03],
+                      highlight_basin_ids=[1466500, 4105700, 6431500]
+                      )
 geoplot_single_metric(fhv_abs_diff, 'fhv_abs', ax=axes[1],
                       vmin=-20, vmax=20, cmap=base_cmap2, marker='^',
-                      title="|FHV| Difference", cax_pos=[0.80, 0.07, 0.18, 0.03])
+                      cbar_title="|FHV| Difference", cax_pos=[0.80, 0.07, 0.18, 0.03],
+                      highlight_basin_ids=[1466500, 4105700, 6431500]
+                      )
 fig.savefig(os.path.join(os.getenv("PROJ_PATH"), "project/better_estimate/visualize/figures/spatial_diff_plot.png"),
             dpi=300)
-
-# correlation
-# basin_attr = loader.eval_dataset['c_nn_norm'].cpu().numpy()
-# q_mean = np.mean(loader.eval_dataset['target'].cpu().numpy(), axis=0)
-# basin_df = pd.DataFrame(data=basin_attr, columns=loader.nn_attributes)
-# lstm_fhv = fetch_data(config=lstm_config, metric='fhv_abs')
-# hopev1_fhv = fetch_data(config=hopev1_config, metric='fhv_abs')
-# basin_df['q_mean'] = q_mean
-# basin_df['fhv_abs1'] = np.log(lstm_fhv['fhv_abs'])
-# basin_df['fhv_abs2'] = np.log(hopev1_fhv['fhv_abs'])
-# plt.scatter(basin_df['q_mean'], basin_df['fhv_abs1'])
-# plt.scatter(basin_df['q_mean'], basin_df['fhv_abs2'])
-# plt.show()
-# basin_df.corr()['fhv_abs1']
-#
-
-# nse_diff.loc[nse_diff['nse'] > 0.01]
-# fhv_abs_diff.loc[kge_diff['kge'] > 0.01]
-
-# nse_diff_values = nse_diff['nse'].values
-# nse_diff_values = np.where(nse_diff_values > 0.5, 0.5, nse_diff_values)
-# nse_diff_values = np.where(nse_diff_values < -0.5, -0.5, nse_diff_values)
-# plt.hist(nse_diff_values, bins=100)
-# plt.hist(fhv_abs_diff['fhv_abs'], bins=30)
-# plt.show()

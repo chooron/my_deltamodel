@@ -153,6 +153,51 @@ def create_training_grid(
     return n_samples, n_iter_ep, n_t,
 
 
+def create_dl_training_grid(
+    x: NDArray[np.float32],
+    config: dict[str, Any],
+    n_samples: int = None,
+) -> tuple[int, int, int]:
+    """Define a training grid for pure deep learning models.
+
+    This function calculates the number of iterations per epoch based on
+    seq_len and pred_len instead of rho and warm_up.
+
+    Parameters
+    ----------
+    x
+        The input data for a model.
+    config
+        Configuration dictionary.
+    n_samples
+        The number of samples to use in the training grid.
+    
+    Returns
+    -------
+    tuple[int, int, int]
+        The number of samples, the number of iterations per epoch, and the
+        number of timesteps.
+    """
+    n_t = x.shape[0]
+
+    if n_samples is None:
+        n_samples = x.shape[1]
+
+    seq_len = config.get('seq_len', 365)
+    pred_len = config.get('pred_len', 1)
+    n_time_batch = config.get('n_time_batch', 100)
+    
+    # 有效的时间步数 = 总时间步 - 序列长度 - 预测长度
+    effective_timesteps = n_t - seq_len - pred_len
+    
+    # 计算每个epoch的迭代次数
+    # 每个 batch 采样 n_basins * n_time_batch 个样本
+    # 迭代次数 = 有效时间步数 / n_time_batch
+    n_iter_ep = max(1, effective_timesteps // n_time_batch)
+    
+    return n_samples, n_iter_ep, n_t,
+
+
 def select_subset(
     config: dict,
     x: NDArray[np.float32],

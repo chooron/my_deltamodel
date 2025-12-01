@@ -9,9 +9,9 @@ from dmg.models.neural_networks.layers.ann import AnnModel
 
 class LstmMlpModel(torch.nn.Module):
     """LSTM-MLP model for multi-scale learning.
-    
+
     Supports GPU and CPU forwarding.
-    
+
     Parameters
     ----------
     nx1
@@ -35,20 +35,20 @@ class LstmMlpModel(torch.nn.Module):
     """
 
     def __init__(
-            self,
-            *,
-            nx1: int,
-            ny1: int,
-            hiddeninv1: int,
-            nx2: int,
-            ny2: int,
-            hiddeninv2: int,
-            dr1: Optional[float] = 0.5,
-            dr2: Optional[float] = 0.5,
-            device: Optional[str] = 'cpu',
+        self,
+        *,
+        nx1: int,
+        ny1: int,
+        hiddeninv1: int,
+        nx2: int,
+        ny2: int,
+        hiddeninv2: int,
+        dr1: Optional[float] = 0.5,
+        dr2: Optional[float] = 0.5,
+        device: Optional[str] = "cpu",
     ) -> None:
         super().__init__()
-        self.name = 'LstmMlpModel'
+        self.name = "LstmMlpModel"
 
         # GPU-only HydroDL LSTM.
         self.lstminv = nn.Sequential(
@@ -58,17 +58,20 @@ class LstmMlpModel(torch.nn.Module):
         )
         self.fc = nn.Linear(hiddeninv1, ny1)
         self.ann = AnnModel(
-            nx=nx2, ny=ny2, hidden_size=hiddeninv2, dr=dr2,
+            nx=nx2,
+            ny=ny2,
+            hidden_size=hiddeninv2,
+            dr=dr2,
         )
-    
+
     @classmethod
     def build_by_config(cls, config, device):
         return cls(
-            nx1=config['nx'],
-            ny1=config['ny1'],
+            nx1=config["nx"],
+            ny1=config["ny1"],
             hiddeninv1=config["lstm_hidden_size"],
-            nx2=config['nx2'],
-            ny2=config['ny2'],
+            nx2=config["nx2"],
+            ny2=config["ny2"],
             hiddeninv2=config["mlp_hidden_size"],
             dr1=config["lstm_dropout"],
             dr2=config["mlp_dropout"],
@@ -77,10 +80,10 @@ class LstmMlpModel(torch.nn.Module):
 
     def forward(
         self,
-        data_dict:dict,
+        data_dict: dict,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        z1 = data_dict['xc_nn_norm']
-        z2 = data_dict['c_nn_norm']
+        z1 = data_dict["xc_nn_norm"]
+        z2 = data_dict["c_nn_norm"]
         lstm_out, _ = self.lstminv(z1)  # dim: timesteps, gages, params
         fc_out = self.fc(lstm_out)
         ann_out = self.ann(z2)
@@ -89,4 +92,9 @@ class LstmMlpModel(torch.nn.Module):
     def predict_timevar_parameters(self, z1):
         lstm_out, _ = self.lstminv(z1)  # dim: timesteps, gages, params
         fc_out = self.fc(lstm_out)
-        return F.sigmoid(fc_out).reshape(-1, 3, 16)
+        return F.sigmoid(fc_out).reshape(fc_out.shape[0], 3, -1)
+
+    def predict_timevar_parametersv2(self, z1):
+        lstm_out, _ = self.lstminv(z1.permute(1, 0, 2))  # dim: timesteps, gages, params
+        fc_out = self.fc(lstm_out)
+        return F.sigmoid(fc_out).permute(1, 0, 2)

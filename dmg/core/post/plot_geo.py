@@ -2,6 +2,7 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as PathEffects
 import geopandas as gpd
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -46,6 +47,7 @@ def geoplot_single_metric(
         gdf: gpd.GeoDataFrame,
         metric_name: str,
         title: str = None,
+        cbar_title: str = None,
         map_color: bool = False,
         draw_rivers: bool = False,
         dynamic_colorbar: bool = False,
@@ -53,50 +55,18 @@ def geoplot_single_metric(
         marker='o',
         marker_size: int = 50,
         ax=None,
-        cax_pos=[0.83, 0.07, 0.16, 0.03],
+        cax_pos=[0.8, 0.07, 0.16, 0.03],
         cmap="RdBu",
         fontsize=16,
         alpha=0.8,
         labelsize=14,
         vmin=0,
         vmax=1,
+        highlight_basin_ids: list = None,  # 需要高亮的 basin_id 列表
+        basin_id_col: str = 'gage_id'     # gdf 中对应的列名
 ):
-    """Geographically map a single model performance metric using Cartopy.
-
-    Parameters
-    ----------
-    gdf
-        GeoDataFrame with 'lat', 'lon', and metric columns.
-    metric_name
-        The name of the metric column to plot.
-    title
-        The title of the plot.
-    map_color
-        Whether to use color for the map background.
-    draw_rivers
-        Whether to draw rivers on the map.
-    dynamic_colorbar
-        If True, colorbar limits are based on data. If False, vmin/vmax are used.
-    dpi
-        The resolution of the plot.
-    marker_size
-        The size of the markers.
-    ax
-        A pre-existing Matplotlib Axes with a Cartopy projection.
-    cmap
-        The colormap to use for the scatter points.
-    vmin
-        Minimum value for the colorbar.
-    vmax
-        Maximum value for the colorbar.
-
-    Returns
-    -------
-    fig
-        The Matplotlib Figure object.
-    ax
-        The Matplotlib Axes object.
-    """
+    """Geographically map a single model performance metric using Cartopy."""
+    
     # --- Input Validation ---
     if 'lat' not in gdf.columns or 'lon' not in gdf.columns:
         raise ValueError("GeoDataFrame must include 'lat' and 'lon' columns.")
@@ -126,31 +96,107 @@ def geoplot_single_metric(
         ax.add_feature(cfeature.OCEAN, facecolor='white', zorder=0)
     if draw_rivers:
         ax.add_feature(cfeature.RIVERS.with_scale('50m'), linewidth=0.3, edgecolor='blue', zorder=1)
+    
+    if title:
+        ax.set_title(title, fontsize=fontsize + 2)
 
     # --- Plot the Metric Data ---
-    scatter = ax.scatter(
-        gdf['lon'], gdf['lat'],
-        c=gdf[metric_name],
-        s=marker_size,
-        marker=marker,
-        cmap=cmap,
-        alpha=alpha,
-        edgecolor='none',
-        transform=ccrs.PlateCarree(),
-        vmin=(None if dynamic_colorbar else vmin),
-        vmax=(None if dynamic_colorbar else vmax),
-        zorder=3
-    )
+    
+    # 1. 确定统一的 vmin 和 vmax
+    if dynamic_colorbar:
+        plot_vmin = gdf[metric_name].min()
+        plot_vmax = gdf[metric_name].max()
+    else:
+        plot_vmin = vmin
+        plot_vmax = vmax
 
-    # --- MODIFIED: Add Inset Colorbar ---
-    # Create an inset axes for the colorbar inside the main plot.
-    # Position: [left, bottom, width, height] in axes coordinates (from 0 to 1).
-    # To center a 0.3 width bar: left = (1.0 - 0.3) / 2 = 0.35
+    # 2. 判断是否需要高亮
+    scatter_for_cbar = None # 用于传递给colorbar的对象
+
+    if highlight_basin_ids and basin_id_col in gdf.columns:
+        mask_highlight = gdf[basin_id_col].isin(highlight_basin_ids)
+        gdf_highlight = gdf[mask_highlight]
+        gdf_normal = gdf[~mask_highlight]
+
+        # 2.1 画普通点 (底层)
+        scatter_for_cbar = ax.scatter(
+            gdf_normal['lon'], gdf_normal['lat'],
+            c=gdf_normal[metric_name],
+            s=marker_size,
+            marker=marker,
+            cmap=cmap,
+            alpha=alpha,
+            edgecolor='none',
+            transform=ccrs.PlateCarree(),
+            vmin=plot_vmin,
+            vmax=plot_vmax,
+            zorder=3
+        )
+
+        # 2.2 画高亮点 (顶层 + 黑色边框)
+        if not gdf_highlight.empty:
+            ax.scatter(
+                gdf_highlight['lon'], gdf_highlight['lat'],
+                c=gdf_highlight[metric_name],
+                s=marker_size, 
+                marker=marker,
+                cmap=cmap,
+                alpha=alpha, # 如果希望高亮点完全不透明，可设为 1.0
+                edgecolor='black', # 黑色边框
+                linewidth=1.2,     # 边框稍粗一点更明显
+                transform=ccrs.PlateCarree(),
+                vmin=plot_vmin,
+                vmax=plot_vmax,
+                zorder=4
+            )
+
+            # --- [核心新增] 添加标注 (ID Label) ---
+            for idx, row in gdf_highlight.iterrows():
+                # 获取ID文本
+                label_text = str(row[basin_id_col])
+                
+                # 使用 annotate 添加文本
+                # xy: 点的经纬度
+                # xytext: 文本相对于点的偏移量 (x, y)，单位是 point (像素点)
+                # textcoords: 指定偏移量的参考系
+                txt = ax.annotate(
+                    text=label_text,
+                    xy=(row['lon'], row['lat']),
+                    xytext=(5, 5),  # 向右上方偏移 5 个点，避免遮挡数据点
+                    textcoords='offset points',
+                    transform=ccrs.PlateCarree(), # 这一步至关重要，告诉matplotlib坐标是经纬度
+                    fontsize=fontsize - 2, # 字体稍微比标题小一点
+                    fontweight='bold',
+                    color='black',
+                    zorder=5 # 文字必须在最上层
+                )
+                
+                # [可选] 给文字加白色描边，防止地图背景太黑看不清文字
+                txt.set_path_effects([PathEffects.withStroke(linewidth=2, foreground='white')])
+
+    else:
+        # 无高亮逻辑，全量绘制
+        scatter_for_cbar = ax.scatter(
+            gdf['lon'], gdf['lat'],
+            c=gdf[metric_name],
+            s=marker_size,
+            marker=marker,
+            cmap=cmap,
+            alpha=alpha,
+            edgecolor='none',
+            transform=ccrs.PlateCarree(),
+            vmin=plot_vmin,
+            vmax=plot_vmax,
+            zorder=3
+        )
+
+    # --- Colorbar setup ---
     cax = ax.inset_axes(cax_pos)
+    # 无论上面走了哪个分支，scatter_for_cbar 都是包含了正确 cmap/norm 的对象
+    cbar = fig.colorbar(scatter_for_cbar, cax=cax, orientation='horizontal')
+    cbar.ax.tick_params(labelsize=labelsize)
+    
+    if cbar_title:
+        cbar.ax.set_title(cbar_title, fontsize=fontsize, pad=8) 
 
-    # Create the colorbar using the new inset axes (cax).
-    cbar = fig.colorbar(scatter, cax=cax, orientation='horizontal')
-    cbar.ax.tick_params(labelsize=14)
-    cbar.set_label(title, fontsize=fontsize, labelpad=-45)  # 使用 labelpad 调整标题位置
-    # --- End of Modification ---
     return fig, ax

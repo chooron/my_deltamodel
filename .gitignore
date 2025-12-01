@@ -203,3 +203,8 @@ cache
 
 !README.md
 !data/README.md
+
+*.npy
+*.npz
+
+runs

@@ -44,7 +44,7 @@ class Identity(torch.nn.Module):
     def forward(
         self,
         _: dict[str, torch.Tensor],
-        parameters: torch.Tensor,
+        parameters: tuple[torch.Tensor, torch.Tensor],
     ) -> Union[tuple, dict[str, torch.Tensor]]:
         """Forward pass for HBV.
 
@@ -67,4 +67,8 @@ class Identity(torch.nn.Module):
             # No state warm up - run the full model for warm_up days.
             self.pred_cutoff = self.warm_up
 
-        return {"streamflow": self.fc_layer(parameters[self.warm_up :, :, :])}
+        return {
+            "streamflow": self.fc_layer(
+                parameters[0][-1:, :, :]  # 只取最后一个时间步作为预测
+            ).unsqueeze(-1)
+        }

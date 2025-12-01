@@ -42,6 +42,7 @@ dependencies = [
     "cfgrib>=0.9.15.1",
     "pytorch-tsmixer>=0.2.0",
     "plotly>=6.4.0",
+    "time-interpret>=0.3.0",
 ]
 
 [project.optional-dependencies]

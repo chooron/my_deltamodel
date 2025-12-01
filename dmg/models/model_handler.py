@@ -292,10 +292,15 @@ class ModelHandler(torch.nn.Module):
         for name, output in self.output_dict.items():
             if self.target_name not in output.keys():
                 raise ValueError(f"Target variable '{self.target_name}' not in model outputs.")
-            output = output[self.target_name]
+            output = output[self.target_name].squeeze()
+            target = dataset_dict['target'].squeeze()
+            if len(output.shape) < 2:
+                output = output.unsqueeze(0)
+            if len(target.shape) < 2:
+                target = target.unsqueeze(0)
             loss = loss_func(
-                output.squeeze(),
-                dataset_dict['target'].squeeze(),
+                output,
+                target,
                 sample_ids=dataset_dict['batch_sample'],
             )
             loss_combined += loss

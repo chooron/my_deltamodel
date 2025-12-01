@@ -78,7 +78,7 @@ class S4DKernel(nn.Module):
 
         # print("S4D kernel: N = ", N, cfi, cfr)
 
-        log_A_real = torch.log(0.5 * torch.ones(H, N // 2)) * cfr # config v1
+        log_A_real = torch.log(0.5 * torch.ones(H, N // 2)) * cfr  # config v1
         A_imag = math.pi * repeat(torch.arange(N // 2), "n -> h n", h=H) * cfi
         self.register("log_A_real", log_A_real, lr)
         self.register("A_imag", A_imag, lr)
@@ -150,7 +150,7 @@ class S4D(nn.Module):
         self.kernel = S4DKernel(self.h, cfr, cfi, N=self.n, **kernel_args)
 
         # Pointwise
-        self.activation = nn.GELU() # config v1
+        self.activation = nn.GELU()  # config v1
         # self.activation = nn.Tanh()  # config v2
         # dropout_fn = nn.Dropout2d # NOTE: bugged in PyTorch 1.11
         dropout_fn = DropoutNd
@@ -321,5 +321,141 @@ class Hope(nn.Module):
 
         # Decode the outputs
         x = self.decoder(x)  # (B, d_model) -> (B, d_output)
+
+        return x
+
+
+class HopeV2(nn.Module):
+    def __init__(
+        self,
+        input_size,
+        hidden_size=256,
+        n_layers=2,
+        dropout=0.1,
+        cfg=None,
+        output_size=None,
+        prenorm=False,
+    ):
+        super().__init__()
+
+        self.prenorm = prenorm
+
+        # 1. Linear encoder
+        self.encoder = nn.Linear(input_size, hidden_size)
+
+        # 2. Stack S4 layers
+        self.s4_layers = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        self.dropouts = nn.ModuleList()
+
+        # 定义 Dropout 函数
+        dropout_fn = lambda d: nn.Dropout(d)
+
+        if cfg is None:
+            cfg = {
+                "lr_min": 0.001,
+                "lr": 0.01,
+                "lr_dt": 0.0,
+                "min_dt": 0.001,
+                "max_dt": 0.01,
+                "wd": 0.01,
+                "d_state": 64,
+                "cfr": 1.0,
+                "cfi": 1.0,
+                "out_activation": "tanh",
+            }
+
+        for _ in range(n_layers):
+            self.s4_layers.append(
+                S4D(
+                    hidden_size,
+                    dropout=dropout,
+                    transposed=True,  # 意味着 S4D 期望 (B, Hidden, Length)
+                    lr=min(cfg["lr_min"], cfg["lr"]),
+                    d_state=cfg["d_state"],
+                    dt_min=cfg["min_dt"],
+                    dt_max=cfg["max_dt"],
+                    lr_dt=cfg["lr_dt"],
+                    cfr=cfg["cfr"],
+                    cfi=cfg["cfi"],
+                    wd=cfg["wd"],
+                    out_activation=cfg["out_activation"],
+                )
+            )
+            # 【关键修改 1】使用 LayerNorm 替代 BatchNorm1d
+            # LayerNorm 更加适合长序列回归，避免破坏时间动态性
+            self.norms.append(nn.LayerNorm(hidden_size))
+            self.dropouts.append(dropout_fn(dropout))
+
+        # 【关键修改 2】平滑层 (Conv1d)
+        self.smoother = nn.Conv1d(
+            hidden_size,
+            hidden_size,
+            kernel_size=7,  # 如果仍然震荡，可以尝试增大到 15 或 25
+            padding=3,  # (kernel_size - 1) // 2
+            groups=hidden_size,  # 通道独立
+            bias=False,
+        )
+
+        # 【关键修改 3】强制初始化为均值平滑
+        with torch.no_grad():
+            self.smoother.weight.fill_(1.0 / 7)
+
+        # Linear decoder
+        if output_size is None:
+            self.decoder = nn.Identity()
+        else:
+            self.decoder = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        """
+        Input x is shape (B, L, d_input)
+        """
+        # 1. Encoder: (B, L, Input) -> (B, L, Hidden)
+        x = self.encoder(x)
+
+        # 2. Transpose: (B, L, Hidden) -> (B, Hidden, L)
+        # S4D 和 Conv1d 都需要 Hidden 在中间
+        x = x.transpose(-1, -2)
+
+        # 3. Main Loop
+        for layer, norm, dropout in zip(
+            self.s4_layers, self.norms, self.dropouts
+        ):
+            z = x  # z shape: (B, Hidden, L)
+
+            # --- PreNorm 逻辑 ---
+            if self.prenorm:
+                # LayerNorm 需要 (B, L, Hidden)，所以必须转置
+                z = z.transpose(-1, -2)  # (B, L, Hidden)
+                z = norm(z)
+                z = z.transpose(-1, -2)  # 转回 (B, Hidden, L) 给 S4
+
+            # Apply S4 block (Expects B, Hidden, L)
+            z, _ = layer(z)
+
+            # Dropout
+            z = dropout(z)
+
+            # Residual connection
+            x = z + x
+
+            # --- PostNorm 逻辑 (通常默认走这里) ---
+            if not self.prenorm:
+                # LayerNorm 需要 (B, L, Hidden)，必须转置
+                x = x.transpose(-1, -2)  # (B, L, Hidden)
+                x = norm(x)
+                x = x.transpose(-1, -2)  # 转回 (B, Hidden, L) 保持循环一致性
+
+        # 4. Apply Smoother (Conv1d)
+        # 此时 x 是 (B, Hidden, L)，正是 Conv1d 想要的
+        x = self.smoother(x)
+
+        # 5. Transpose back for Decoder
+        # Decoder (Linear) 需要 (B, L, Hidden)
+        x = x.transpose(-1, -2)
+
+        # 6. Decoder
+        x = self.decoder(x)  # (B, L, Output)
 
         return x

@@ -6,10 +6,6 @@ import torch.nn.functional as F
 
 from dmg.models.neural_networks.layers.ann import AnnModel
 from dmg.models.neural_networks.layers.hope import Hope
-from dmg.models.neural_networks.layers.ema import (
-    ExponentialMovingAverage,
-    SimpleMovingAverage,
-)
 
 
 class HopeMlpV2(torch.nn.Module):
@@ -28,33 +24,30 @@ class HopeMlpV2(torch.nn.Module):
     ) -> None:
         super().__init__()
         self.name = "HopeMlpModel"
-        config = {
-            "lr_min": 0.001,
-            "lr": 0.01,
-            "lr_dt": 0.0,
-            "min_dt": 0.001,
-            "max_dt": 0.01,  # change to 0.01
-            "wd": 0.01,  # change to 0.01
-            "d_state": 256,
-            "cfr": 1.2,
-            "cfi": 0.8,
-            "use_gated": False,
-            "out_activation": 'glu',
-        }
+        # cfg = {"lr_min": 0.001, "lr": 0.01, "lr_dt": 0.0, "min_dt": 0.001,
+        #        "max_dt": 1, "wd": 0.0, "d_state": 64, "cfr": 1.0, "cfi": 1.0}
         self.hope_layer = Hope(
             input_size=nx1,
+            output_size=ny1,
             hidden_size=hiddeninv1,
             dropout=dr1,
-            cfg=config,
+            n_layers=4,
             prenorm=False,
-            n_layers=3,
+            cfg={
+                "lr_min": 0.001,
+                "lr": 0.01,
+                "lr_dt": 0.0,
+                "min_dt": 0.001,
+                "max_dt": 1,
+                "wd": 0.0,
+                "d_state": 64,
+                "cfr": 1.0,
+                "cfi": 1.0,
+                "use_gated": False,
+                "out_activation": "glu",
+            },
         )
-        self.fc = nn.Linear(hiddeninv1, ny1, bias=True)
-        # self.norm = nn.LayerNorm(hiddeninv1)
-        # self.ma = SimpleMovingAverage(
-        #     channels=hiddeninv1, kernel_size=11, per_channel=True
-        # )
-        # self.a = 0.5
+        self.a = 0.5
         self.ann = AnnModel(
             nx=nx2,
             ny=ny2,
@@ -75,7 +68,6 @@ class HopeMlpV2(torch.nn.Module):
             dr2=config["mlp_dropout"],
             device=device,
         )
-        
 
     def forward(
         self,
@@ -83,10 +75,16 @@ class HopeMlpV2(torch.nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         z1 = data_dict["xc_nn_norm"]
         z2 = data_dict["c_nn_norm"]
-        hope_out = self.hope_layer(
-            torch.permute(z1, (1, 0, 2))
-        ).permute((1, 0, 2))  # dim: timesteps, gages, params
-        # fc_out = self.fc(self.ma(self.norm(hope_out)))
-        fc_out = self.fc(hope_out)
+        hope_out = self.hope_layer(torch.permute(z1, (1, 0, 2))).permute(
+            1, 0, 2
+        )
         ann_out = self.ann(z2)
-        return (F.tanh(fc_out) + 1) / 2, F.sigmoid(ann_out)
+        hope_out = (F.tanh(hope_out * self.a) + 1) / 2
+        ann_out = F.sigmoid(ann_out)
+        return hope_out, ann_out
+
+    def predict_timevar_parameters(self, z1):
+        hope_out = self.hope_layer(torch.permute(z1, (1, 0, 2))).permute(
+            1, 0, 2
+        )
+        return ((F.tanh(hope_out * self.a) + 1) / 2).reshape(-1, 3, 16)

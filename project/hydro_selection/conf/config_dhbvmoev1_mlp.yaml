@@ -39,17 +39,21 @@ train:
     target: [streamflow]
     optimizer: Adadelta
     batch_size: 100
-    epochs: 100
+    epochs: 50
     start_epoch: 0
     save_epoch: 5
-
+    learning_rate: 1.0
+    lr_scheduler: None
+    lr_scheduler_params:
+        step_size: 10
+        gamma: 0.5
 
 ## Evaluation -------------------------------#
 test:
     start_time: 1995/10/01
     end_time: 2010/09/30
     batch_size: 100
-    test_epoch: 100
+    test_epoch: 50
     split_dataset: True
 
 
@@ -93,11 +97,7 @@ delta_model:
         dr1: 0.5
         lstm_hidden_size: 64
         fc_hidden_size: 128
-        learning_rate: 1.0
-        lr_scheduler: None
-        lr_scheduler_params:
-            step_size: 10
-            gamma: 0.5
+
         
         forcings: [
             prcp,

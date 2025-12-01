@@ -21,8 +21,8 @@ random_seed: 42
 device: cuda
 gpu_id: 0
 
-data_loader: HydroLoader
-data_sampler: HydroSampler
+data_loader: DlLoader
+data_sampler: DlSampler
 trainer: Trainer
 
 save_path: project/better_estimate/output
@@ -30,7 +30,9 @@ save_path: project/better_estimate/output
     #       If you want to save the output in a different directory, please specify the absolute path.
     #       * If a valid trained_model path is specified, save_path will be set to trained_model.
 trained_model: project/better_estimate/output/model/  # Pretrained dHBV 1.1p can be downloaded from: https://mhpi-spatial.s3.us-east-2.amazonaws.com/mhpi-release/models/dHBV_1_1p_trained.zip
-
+seq_len: 365      # 历史天数
+pred_len: 1       # 预测天数
+n_time_batch: 100 # 每个batch采样的时间步数量，实际batch = batch_size * n_time_batch
 
 ## Training ------------------------------#
 train:
@@ -38,17 +40,21 @@ train:
     end_time: 1995/09/30
     target: [streamflow]
     optimizer: Adadelta
-    batch_size: 100
+    batch_size: 531
     epochs: 100
     start_epoch: 0
     save_epoch: 5
-
+    learning_rate: 1.0
+    lr_scheduler: None
+    lr_scheduler_params:
+        step_size: 10
+        gamma: 0.5
 
 ## Evaluation -------------------------------#
 test:
     start_time: 1995/10/01
     end_time: 2010/09/30
-    batch_size: 100
+    batch_size: 531
     test_epoch: 100
     split_dataset: True
 
@@ -66,7 +72,7 @@ loss_function:
 
 ## Differentiable Model -----------------------------#
 delta_model:
-    rho: 365
+    rho: 1
     
     phy_model:
         ## Citations ##
@@ -90,15 +96,11 @@ delta_model:
         attributes: []
 
     nn_model:
-        model: Hope
+        model: HopeV1
         dropout: 0.2
         hidden_size: 256
         n_layers: 4
-        learning_rate: 1.0
-        lr_scheduler: None
-        lr_scheduler_params:
-            step_size: 10
-            gamma: 0.5
+
         
         forcings: [
             prcp,

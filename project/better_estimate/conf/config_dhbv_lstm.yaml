@@ -42,7 +42,11 @@ train:
     epochs: 100
     start_epoch: 0
     save_epoch: 5
-
+    learning_rate: 1.0
+    lr_scheduler: None
+    lr_scheduler_params:
+        step_size: 10
+        gamma: 0.5
 
 ## Evaluation -------------------------------#
 test:
@@ -103,11 +107,7 @@ delta_model:
         lstm_dropout: 0.5
         lstm_hidden_size: 256
         mlp_hidden_size: 256
-        learning_rate: 1.0
-        lr_scheduler: None
-        lr_scheduler_params:
-            step_size: 10
-            gamma: 0.5
+
         
         forcings: [
             prcp,

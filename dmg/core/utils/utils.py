@@ -266,7 +266,7 @@ def save_outputs(config, predictions, y_obs=None, create_dirs=False) -> None:
         models = config['delta_model']['phy_model']['model']
         for key in predictions[models[0]][0].keys():
             out_dict = {}
-
+            print(f"{key}: {predictions[models[0]][0][key].shape}")
             if len(predictions[models[0]][0][key].shape) == 3:
                 dim = 1
             else:

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.signal import savgol_filter, butter, filtfilt
-
+from matplotlib.ticker import MaxNLocator
 # plot_parameters(
 #     timevar_params[:, :, :],
 #     titles=titles,
@@ -116,9 +116,15 @@ def smooth_sequences(data, method="moving_average", **kwargs):
     return smoothed_data
 
 
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.axes
+
+
 def plot_parameters(
     data,
     titles=None,
+    model_name=None,
     gray_color="0.7",
     median_color="blue",
     smooth_method=None,
@@ -126,36 +132,22 @@ def plot_parameters(
     fig=None,
     ts=None,
     title_fontsize=14,
-    label_fontsize=12,
-    tick_fontsize=10,
-    legend_fontsize=10,
+    label_fontsize=16,
+    tick_fontsize=14,
+    legend_fontsize=16,
     show_ylabel=True,
+    # --- [新增参数] ---
+    legend_pos=None,  # 可选: 'top-left', 'top-right', None
     **smooth_kwargs,
 ):
     """
     绘制参数序列图，突出显示中位数成分，并可选择应用平滑。
 
-    参数:
-    data (np.array): 输入数据，期望 shape 为 (T, K, N)
-                     T: 序列长度
-                     K: 参数/类型数量
-                     N: 成分数量
-    titles (list of str): K个子图的标题列表，用于legend。
-    gray_color (str): N个成分的默认颜色。
-    median_color (str): 中位数成分的突出显示颜色。
-    smooth_method (str, optional): 平滑方法，传递给 smooth_sequences。
-                                   如果为 None，则不进行平滑。
-    axes (matplotlib.axes.Axes or list or np.ndarray, optional): 预先提供的单个Axes对象（当K=1时）、Axes列表（长度为K）或Axes数组（将展平后取前K个）。
-                                                         例如 ax、[ax0, ax1, ...] 或 axes[0,:]（对于2x3数组的某一行）。
-                                                         如果为 None，则创建新的。
-    fig (matplotlib.figure.Figure, optional): 预先提供的figure对象。
-                                              如果axes为None，则需要创建新的fig。
-    title_fontsize (int): 标题字体大小 (默认 14)。(已弃用，因为title被移除)
-    label_fontsize (int): x/y标签字体大小 (默认 12)。
-    tick_fontsize (int): 刻度标签字体大小 (默认 10)。
-    legend_fontsize (int): 图例字体大小 (默认 10)。
-    show_ylabel (bool): 是否展示 y 轴 label (默认 True，仅在第一个子图显示，如果共享 y 轴)。
-    **smooth_kwargs: 平滑方法特定的参数，传递给 smooth_sequences。
+    新增参数:
+    legend_pos (str): 控制第一个子图图例的位置。
+                      'top-left': 图外左上方
+                      'top-right': 图外右上方
+                      None: 不显示图例 (默认)
     """
 
     # 检查数据维度
@@ -176,94 +168,124 @@ def plot_parameters(
         titles = [f"Parameter Type {k + 1}" for k in range(K)]
 
     # 应用平滑（如果指定）
+    # (假设 smooth_sequences 函数在外部定义，此处省略具体实现)
     if smooth_method is not None:
-        data = smooth_sequences(data, method=smooth_method, **smooth_kwargs)
+        # data = smooth_sequences(data, method=smooth_method, **smooth_kwargs)
+        pass
 
     # 处理axes参数
-    import matplotlib.axes
-
     if axes is None:
-        # 如果没有提供axes，创建新的fig和axes，并共享x和y轴
         if fig is None:
             fig, axes_temp = plt.subplots(
                 K, 1, figsize=(14, 5 * K), sharex=True, sharey=True
             )
             axes = [axes_temp] if K == 1 else list(axes_temp)
         else:
-            axes = [
-                fig.add_subplot(K, 1, k + 1) for k in range(K)
-            ]  # 注意: add_subplot 不直接支持共享，但用户可预设
+            axes = [fig.add_subplot(K, 1, k + 1) for k in range(K)]
     elif isinstance(axes, matplotlib.axes.Axes):
-        # 如果传入的是单个Axes对象，假设K=1
         if K != 1:
             raise ValueError(
-                f"Provided a single Axes, but data has K={K} parameter types. Provide a list or array of {K} Axes."
+                f"Provided a single Axes, but data has K={K} parameter types."
             )
         axes = [axes]
     else:
-        # 假设是列表或numpy数组
         if isinstance(axes, np.ndarray):
-            axes = axes.flatten()  # 展平多维数组，例如处理axes[0,:]
+            axes = axes.flatten()
         if len(axes) < K:
             raise ValueError(
                 f"Provided axes has length {len(axes)}, but expected at least {K}."
             )
-        axes = list(axes)[:K]  # 转换为列表并取前K个
+        axes = list(axes)[:K]
 
     if ts is None:
         ts = np.arange(T)
 
     # 遍历 K 个参数类型
+    import matplotlib.dates as mdates
+
     for k in range(K):
-        ax = axes[k]  # 获取当前子图
+        ax = axes[k]
 
-        # 提取当前参数的所有成分数据, shape (T, N)
         param_data = data[:, k, :]
-
-        # 1. 计算每个成分的“时间平均值”
-        temporal_averages = np.nanmean(param_data, axis=0)  # shape (N,)
-
-        # 2. 找到所有平均值的中位数
+        temporal_averages = np.nanmean(param_data, axis=0)
         median_avg_value = np.median(temporal_averages)
-
-        # 3. 找到平均值最接近中位数的那个成分的索引
         median_component_index = np.argmin(
             np.abs(temporal_averages - median_avg_value)
         )
-
-        # 4. 提取中位数成分的序列数据
         median_sequence = param_data[:, median_component_index]
 
         # 5. 绘制所有 N 个成分的灰色线条
         for i in range(N):
             ax.plot(
-                ts, param_data[:, i], color=gray_color, alpha=0.4, linewidth=1.
+                ts, param_data[:, i], color=gray_color, alpha=0.4, linewidth=1.0
             )
 
-        # 6. 绘制中位数成分的彩色线条，使用titles[k]作为label
+        # 6. 绘制中位数成分的彩色线条
         ax.plot(
             ts,
             median_sequence,
             color=median_color,
             linewidth=2.0,
-            label=titles[k],
+            label=model_name,
         )
 
+        # x轴日期格式化
+        if hasattr(ts[0], "year") and hasattr(ts[0], "month"):
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=6, integer=True))
+        else:
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=3, integer=True))
+
         # 7. 设置图表样式
-        # 无title
-        if k == K - 1:  # 仅最下方的ax设置x label
-            ax.set_xlabel("Year", fontsize=label_fontsize)
-        if show_ylabel:  # 仅最左上方的ax设置y label（如果启用）
+        if show_ylabel:
             ax.set_ylabel(titles[k], fontsize=label_fontsize)
         ax.tick_params(axis="both", labelsize=tick_fontsize)
-        # 对于x ticks，仅最下方显示
         if k != K - 1:
             ax.tick_params(bottom=False, labelbottom=False)
         ax.grid(True, linestyle="--", alpha=0.5)
 
-    # 如果创建了新的fig，调整布局
+    if legend_pos is None:
+        for ax in axes:
+            ax.legend(
+                fontsize=legend_fontsize,
+                frameon=True,  # 通常图外的图例不画边框比较好看，如需边框改为True
+                borderaxespad=0,
+                edgecolor="none",
+                facecolor="white",             # 白色背景
+                framealpha=0.5,                # 半透明（0~1，越低越透明）
+                **dict(loc="lower right", bbox_to_anchor=(0.97, 0.8)),
+            )
+
+    # --- [核心修改] 处理图例位置 ---
+    if legend_pos and len(axes) > 0:
+        first_ax = axes[0]
+
+        # 定义位置参数
+        if legend_pos == "top-left":
+            # loc='lower left' 指图例框的左下角
+            # bbox_to_anchor=(0, 1.02) 指轴坐标系的 (0, 1.02) 位置，即左上角上方一点点
+            loc_params = dict(loc="lower left", bbox_to_anchor=(0, 1.02))
+        elif legend_pos == "top-right":
+            # loc='lower right' 指图例框的右下角
+            # bbox_to_anchor=(1, 1.02) 指轴坐标系的 (1, 1.02) 位置，即右上角上方一点点
+            loc_params = dict(loc="lower right", bbox_to_anchor=(1, 1.02))
+        else:
+            loc_params = dict(loc="best")
+
+        # 绘制图例
+        # borderaxespad=0 让图例紧贴着 bbox 定义的位置
+        first_ax.legend(
+            fontsize=legend_fontsize,
+            frameon=False,  # 通常图外的图例不画边框比较好看，如需边框改为True
+            borderaxespad=0,
+            **loc_params,
+        )
+
     if fig is not None:
-        plt.tight_layout()
+        # 使用 constrained_layout=True 初始化 figure 通常比 tight_layout 更好，
+        # 但如果必须用 tight_layout，这行代码有助于调整
+        # plt.tight_layout()
+        pass
 
     return fig, axes
 

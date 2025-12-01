@@ -86,4 +86,8 @@ class HopeMlpV1(torch.nn.Module):
         hope_out = self.hope_layer(torch.permute(z1, (1, 0, 2))).permute(
             1, 0, 2
         )
-        return F.sigmoid(hope_out).reshape(-1, 3, 16)
+        return F.sigmoid(hope_out).reshape(hope_out.shape[0], 3, -1)
+
+    def predict_timevar_parametersv2(self, z1):
+        hope_out = self.hope_layer(z1)
+        return F.sigmoid(hope_out)

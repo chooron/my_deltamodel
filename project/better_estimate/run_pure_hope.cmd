@@ -1,0 +1,1 @@
+nh-run train --config-file E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\neuralhydrology_hope_config.yml

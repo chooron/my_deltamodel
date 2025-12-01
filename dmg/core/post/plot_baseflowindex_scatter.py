@@ -11,7 +11,9 @@ def plot_baseflow_scatter(
     fontsize_labels=14, 
     fontsize_ticks=12,
     fontsize_legend=12,
-    axis_linewidth=1.5,
+    axis_linewidth=2.5,
+    hydroval='BFI',
+    labels_list=["LSTM", "Hopev1"],
     alpha=0.6,
     output_path=None,
     ax=None,
@@ -54,7 +56,7 @@ def plot_baseflow_scatter(
         alpha=alpha, 
         color='blue', 
         marker='o',  # 圆形
-        label=f'LSTM ($R$ = {corr_lstm:.2f})'
+        label=f'{labels_list[0]} ($R^2$ = {corr_lstm:.2f})'
     )
     
     # Hopev1
@@ -64,7 +66,7 @@ def plot_baseflow_scatter(
         alpha=alpha, 
         color='red', 
         marker='s',  # 方形
-        label=f'Hopev1 ($R$ = {corr_hopev1:.2f})'
+        label=f'{labels_list[1]} ($R^2$ = {corr_hopev1:.2f})'
     )
     
     # --- 4. 绘制 1:1 对角线 ---
@@ -74,12 +76,30 @@ def plot_baseflow_scatter(
     max_val = np.max(all_data) * 1.05
     
     # 绘制 y=x 线
-    ax.plot([min_val, max_val], [min_val, max_val], 'k--', linewidth=2, label='1:1 Line')
+    ax.plot([min_val, max_val], [min_val, max_val], 'k--', linewidth=2, label='')
     
     # --- 5. 设置标签和图例 ---
-    ax.set_xlabel('Observed Baseflow Index', fontsize=fontsize_labels)
-    ax.set_ylabel('Simulated Baseflow Index', fontsize=fontsize_labels)
-    ax.legend(fontsize=fontsize_legend, frameon=False) # frameon=False 移除图例边框
+    ax.set_xlabel(f'Observed {hydroval}', fontsize=fontsize_labels)
+    ax.set_ylabel(f'Simulated {hydroval}', fontsize=fontsize_labels)
+    # ax.legend(fontsize=fontsize_legend, frameon=False) # frameon=False 移除图例边框
+    leg = ax.legend(
+        fontsize=fontsize_legend, 
+        loc='upper left', 
+        ncol=1,
+        frameon=True,           # 必须开启边框 (原来是 False)
+        fancybox=True,          # 开启圆角 (对应 boxstyle="round")
+        framealpha=0.7,         # 背景透明度 (对应 alpha=0.7)
+        facecolor='white',      # 背景颜色 (对应 fc="white")
+        edgecolor='black',      # 边框颜色 (对应 ec="black")
+        # --- 核心修改部分 ---
+        handletextpad=0.1,  # [关键] 缩短符号与文字的距离 (默认约 0.8)
+        labelspacing=0.1,   # [关键] 缩短上下行文字的垂直间距 (默认约 0.5)
+        
+        # --- 进一步优化宽度 (可选) ---
+        handlelength=1.5,   # 缩短符号(线条)的长度 (默认约 2.0)
+        borderpad=0.2,      # 减少边框与内容的内部留白 (默认约 0.4~0.5)
+    )
+    leg.get_frame().set_linewidth(1.0)
     
     # --- 6. 设置坐标轴范围 ---
     ax.set_xlim(min_val, max_val)

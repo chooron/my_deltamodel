@@ -58,10 +58,10 @@ hope_flow = np.load(
 )
 
 lstm_ssflow = np.load(
-    os.path.join(lstm_out_path, "ssflow.npy"), allow_pickle=True
+    os.path.join(lstm_out_path, "srflow.npy"), allow_pickle=True
 )
 hope_ssflow = np.load(
-    os.path.join(hope_out_path, "ssflow.npy"), allow_pickle=True
+    os.path.join(hope_out_path, "srflow.npy"), allow_pickle=True
 )
 
 # read forcing data
@@ -119,7 +119,8 @@ vmax_dict = {
     "baseflow_index_error": 0.6,
     "ssflow_ratio": 0.7,
 }
-
+lstm_name = r"$\delta MG_{\mathrm{LSTM}}$: "
+s4d_name = r"$\delta MG_{\mathrm{S4D}}$: "
 fontsize = 16
 labelsize = 14
 
@@ -131,7 +132,7 @@ gs = fig.add_gridspec(
     3,
     width_ratios=[1, 1, 0.75],  # 右边略窄以平衡 tick
     wspace=0.02,
-    hspace=0.02,
+    hspace=0.001,
     left=0.01,
     right=0.99,
     top=0.99,
@@ -157,12 +158,16 @@ for i in range(3):
     axes[i][2].set_position(
         [
             pos.x0,
-            pos.y0 + pos.height * 0.14,  # 上移5%
+            pos.y0 + pos.height * 0.1,  # 上移5%
             pos.width,
             pos.height * 0.8,  # 压短10%
         ]
     )
-
+cbar_title_dict = {
+    "runoff_ratio_error": "RR",
+    "baseflow_index_error": "BFI",
+    "ssflow_ratio": "SR",
+}
 for i, k in enumerate(
     ["runoff_ratio_error", "baseflow_index_error", "ssflow_ratio"]
 ):
@@ -182,6 +187,7 @@ for i, k in enumerate(
             title="",
             fontsize=fontsize,
             labelsize=labelsize,
+            cbar_title=cbar_title_dict[k],
             cax_pos=[0.80, 0.1, 0.18, 0.03],
         )
 
@@ -193,7 +199,10 @@ plot_baseflow_scatter(
     alpha=0.2,
     fontsize_labels=fontsize,
     fontsize_ticks=14,
+    axis_linewidth=1.5,
     fontsize_legend=fontsize,
+    hydroval='RR',
+    labels_list=[lstm_name, s4d_name]
 )
 plot_baseflow_scatter(
     real_baseflow_index,
@@ -203,19 +212,22 @@ plot_baseflow_scatter(
     alpha=0.2,
     fontsize_labels=fontsize,
     fontsize_ticks=14,
+    axis_linewidth=1.5,
     fontsize_legend=fontsize,
+    hydroval='BFI',
+    labels_list=[lstm_name, s4d_name]
 )
 
 metrics = [
-    {"ssflow_ratio": df["ssflow_ratio"].values.tolist()}
+    {"SR": df["ssflow_ratio"].values.tolist()}
     for df in [lstm_hydroeval_df, hope_hydroeval_df]
 ]
 plot_cdf(
     ax=axes[2][2],
     metrics=metrics,
-    metric_names=["ssflow_ratio"],
-    model_labels=["LSTM", "S4D"],
-    xlabel="SSFLOW_RATIO",
+    metric_names=["SR"],
+    model_labels=[lstm_name, s4d_name],
+    xlabel="SR",
     xbounds=(0.0, 1),
     fontsize=fontsize,
     legend_fontsize=fontsize,
@@ -223,7 +235,7 @@ plot_cdf(
     linewidth=1.8,
     colors=["#5B84B1FF", "#D94F4FFF"],
     show_count_label=False,
-    show_legend=False,
+    show_legend=True,
     show_median_label=False,
     count_threshold=0.6,
     axis_width=2.0,

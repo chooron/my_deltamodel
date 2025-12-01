@@ -74,7 +74,6 @@ class HydroSampler(BaseSampler):
         """Generate a training batch."""
         batch_size = self.config['train']['batch_size']
         i_sample, i_t = random_index(ngrid_train, nt, (batch_size, self.rho), warm_up=self.warm_up)
-
         return {
             'x_phy': self.select_subset(dataset['x_phy'], i_sample, i_t),
             'c_phy': dataset['c_phy'][i_sample],

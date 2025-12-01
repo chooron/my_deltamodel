@@ -354,7 +354,7 @@ class Hbv_2(torch.nn.Module):
         # P = parPCORR.repeat(n_steps, 1) * P
 
         # Initialize time series of model variables in shape [time, basins, nmul].
-        Qsimmu = torch.zeros(Pm.size(), dtype=torch.float32, device=self.device) + 0.001
+        Qsimmu = torch.zeros(Pm.size(), dtype=torch.float32, device=self.device) + 0.0001
         Q0_sim = torch.zeros(Pm.size(), dtype=torch.float32, device=self.device) + 0.0001
         Q1_sim = torch.zeros(Pm.size(), dtype=torch.float32, device=self.device) + 0.0001
         Q2_sim = torch.zeros(Pm.size(), dtype=torch.float32, device=self.device) + 0.0001
@@ -368,6 +368,7 @@ class Hbv_2(torch.nn.Module):
         SWE_sim = torch.zeros(Pm.size(), dtype=torch.float32, device=self.device)
         SM_sim = torch.zeros(Pm.size(), dtype=torch.float32, device=self.device)
         capillary_sim = torch.zeros(Pm.size(), dtype=torch.float32, device=self.device)
+        soil_wetness_sim = torch.zeros(Pm.size(), dtype=torch.float32, device=self.device)
 
         param_dict = {}
         for t in range(n_steps):
@@ -453,7 +454,8 @@ class Hbv_2(torch.nn.Module):
             recharge_sim[t, :, :] = recharge
             excs_sim[t, :, :] = excess
             evapfactor_sim[t, :, :] = evapfactor
-            tosoil_sim[t, :, :] = tosoil
+            tosoil_sim[t, :, :] = tosoil + RAIN
+            soil_wetness_sim[t, :, :] = soil_wetness
             PERC_sim[t, :, :] = PERC
             
             SM_sim[t, :, :] = SM
@@ -522,6 +524,11 @@ class Hbv_2(torch.nn.Module):
                 'ssflow': Q1_rout,  # Routed subsurface flow
                 'gwflow': Q2_rout,  # Routed groundwater flow
                 'AET_hydro': AET.mean(-1, keepdim=True),  # Actual ET
+                'AET_full': AET,  # Actual ET
+                'SM_full': SM_sim,  # Actual ET
+                'soilwetness_full': soil_wetness_sim,  # Actual ET
+                'tosoil_full': tosoil_sim,  # Actual ET
+                'recharge_full': recharge_sim,  # Actual ET
                 'PET_hydro': PETm.mean(-1, keepdim=True),  # Potential ET
                 'SWE': SWE_sim.mean(-1, keepdim=True),  # Snow water equivalent
                 'streamflow_no_rout': Qsim.unsqueeze(dim=2),  # Streamflow
