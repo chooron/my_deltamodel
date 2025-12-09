@@ -17,11 +17,11 @@ plt.rcParams.update(
 
 # --- 1. 配置参数 ---
 base_path = Path(__file__).parent / "results"
-basin_id = "6431500"
+basin_id = "1031500"
 # 定义两个对比的模型/结果路径
 models = [
-    {"name": "LSTM", "path": base_path / "lstm" / basin_id / "tig_contribs.npz"},
-    {"name": "Transformer", "path": base_path / "hopev1" / basin_id / "tig_contribs.npz"} # 示例路径
+    {"name": "LSTM", "path": base_path / "lstm" / basin_id / "tint_contribs.npz"},
+    {"name": "Transformer", "path": base_path / "hopev1" / basin_id / "tint_contribs.npz"} # 示例路径
 ]
 
 time_indices = [100, 365, 730]  # 3个时间点
@@ -86,7 +86,7 @@ for row_idx in range(total_rows):
             # --- 噪声处理 ---
             max_val = np.max(np.abs(heat))
             if max_val > 0:
-                heat[np.abs(heat) < max_val * 0.01] = np.nan
+                heat[np.abs(heat) < max_val * 0.05] = np.nan
             
             # --- 绘图 ---
             # 使用绝对值的最大值作为边界，保证0点在cmap中心

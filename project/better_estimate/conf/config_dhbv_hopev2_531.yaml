@@ -94,7 +94,7 @@ delta_model:
     attributes: []
 
   nn_model:
-    model: HopeMlpV4
+    model: HopeMlpV2
     mlp_dropout: 0.5
     hope_dropout: 0.2
     hope_hidden_size: 256

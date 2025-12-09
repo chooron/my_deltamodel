@@ -4,16 +4,16 @@
 experiment_name: hope_benchmark
 
 # files to specify training, validation and test basins (relative to code root or absolute path)
-train_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\531sub_id.txt
-validation_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\531sub_id.txt
-test_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\531sub_id.txt
+train_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\gage_id.txt
+validation_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\gage_id.txt
+test_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\gage_id.txt
 
 # training, validation and test time periods (format = 'dd/mm/yyyy')
 train_start_date: "01/10/1980"
 train_end_date: "30/09/1990"
 validation_start_date: "01/10/1990"
 validation_end_date: "30/09/1995"
-test_start_date: "01/10/1995"
+test_start_date: "01/10/2000"
 test_end_date: "30/09/2010"
 
 # which GPU (id) to use [in format of cuda:0, cuda:1 etc, or cpu, mps or None]
@@ -55,7 +55,7 @@ hidden_size: 128
 initial_forget_bias: 3
 
 # Dropout applied to the output of the LSTM
-output_dropout: 0.5
+output_dropout: 0.2
 
 # --- Training configuration -----------------------------------------------------------------------
 
@@ -67,7 +67,9 @@ loss: NSE
 
 # specify learning rates to use starting at specific epochs (0 is the initial learning rate)
 learning_rate:
-  0: 1e-3
+  0: 1e-2
+  10: 5e-3
+  20: 1e-3
   30: 5e-4
   40: 1e-4
 
@@ -101,7 +103,7 @@ log_tensorboard: True
 log_n_figures: 1
 
 # Save model weights every n epochs
-save_weights_every: 1
+save_weights_every: 5
 
 # --- Data configurations --------------------------------------------------------------------------
 

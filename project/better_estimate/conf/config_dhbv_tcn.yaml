@@ -12,7 +12,7 @@
 defaults:
     - _self_
     - hydra: settings
-    - observations: camels_531 # camels_531, camels_671 
+    - observations: camels_671 # camels_531, camels_671 
 
 
 ## General -------------------------------#
@@ -97,7 +97,7 @@ delta_model:
         attributes: []
 
     nn_model:
-        model: TcnMlpModel
+        model: TcnMlpV1Model
         mlp_dropout: 0.5
         tcn_dropout: 0.5
         tcn_hidden_size: 64

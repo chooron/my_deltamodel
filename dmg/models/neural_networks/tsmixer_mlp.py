@@ -92,3 +92,11 @@ class TSMixerMlpModel(torch.nn.Module):
         fc_out = self.fc(self.drop(tcn_out).permute(1, 0, 2))
         ann_out = self.ann(z2)
         return F.sigmoid(fc_out), F.sigmoid(ann_out)
+
+    def predict_timevar_parameters(self, z1):
+        z1 = z1.repeat(1, 2, 1)
+        tcn_out = self.tsmixesinv(
+            z1.permute(1, 0, 2)
+        )[0:1, :, :]  # dim: timesteps, gages, params
+        fc_out = self.fc(tcn_out.permute(1, 0, 2))
+        return F.sigmoid(fc_out).reshape(fc_out.shape[0], 3, -1)

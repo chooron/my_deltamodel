@@ -391,8 +391,8 @@ class HopeV2(nn.Module):
         self.smoother = nn.Conv1d(
             hidden_size,
             hidden_size,
-            kernel_size=7,  # 如果仍然震荡，可以尝试增大到 15 或 25
-            padding=3,  # (kernel_size - 1) // 2
+            kernel_size=5,  # 如果仍然震荡，可以尝试增大到 15 或 25
+            padding=2,  # (kernel_size - 1) // 2
             groups=hidden_size,  # 通道独立
             bias=False,
         )
@@ -458,4 +458,109 @@ class HopeV2(nn.Module):
         # 6. Decoder
         x = self.decoder(x)  # (B, L, Output)
 
+        return x
+
+
+class HopeV3(nn.Module):
+    def __init__(self, input_size, hidden_size=256, n_layers=2, dropout=0.1, cfg=None, output_size=None, prenorm=False):
+        super().__init__()
+        self.prenorm = prenorm
+        self.encoder = nn.Linear(input_size, hidden_size)
+
+        # 核心层列表
+        self.s4_layers = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        self.dropouts = nn.ModuleList()
+        
+        # 【新加】层内卷积列表
+        self.conv_layers = nn.ModuleList() 
+
+        dropout_fn = lambda d: nn.Dropout(d)
+        
+        for _ in range(n_layers):
+            # 1. 局部特征提取 (Local Context)
+            # 使用 depthwise convolution 节省参数，且不改变通道数
+            self.conv_layers.append(nn.Sequential(
+                nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=2, groups=hidden_size),
+                nn.SiLU() # 或者 GELU
+            ))
+            
+            
+            if cfg is None:
+                cfg = {
+                    "lr_min": 0.001,
+                    "lr": 0.01,
+                    "lr_dt": 0.0,
+                    "min_dt": 0.001,
+                    "max_dt": 0.01,
+                    "wd": 0.01,
+                    "d_state": 64,
+                    "cfr": 1.0,
+                    "cfi": 1.0,
+                    "out_activation": "tanh",
+                }
+            
+            # 2. 全局特征提取 (Global Context)
+            self.s4_layers.append(
+                S4D(
+                    hidden_size,
+                    dropout=dropout,
+                    transposed=True,  # 意味着 S4D 期望 (B, Hidden, Length)
+                    lr=min(cfg["lr_min"], cfg["lr"]),
+                    d_state=cfg["d_state"],
+                    dt_min=cfg["min_dt"],
+                    dt_max=cfg["max_dt"],
+                    lr_dt=cfg["lr_dt"],
+                    cfr=cfg["cfr"],
+                    cfi=cfg["cfi"],
+                    wd=cfg["wd"],
+                    out_activation=cfg["out_activation"],
+                )
+            )
+            
+            self.norms.append(nn.LayerNorm(hidden_size))
+            self.dropouts.append(dropout_fn(dropout))
+
+        if output_size is None:
+            self.decoder = nn.Identity()
+        else:
+            self.decoder = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        # x: (B, L, Input)
+        x = self.encoder(x)
+        x = x.transpose(-1, -2) # (B, Hidden, L)
+
+        for conv, layer, norm, dropout in zip(self.conv_layers, self.s4_layers, self.norms, self.dropouts):
+            residual = x
+            z = x
+            
+            # --- PreNorm (推荐) ---
+            if self.prenorm:
+                z = z.transpose(-1, -2)
+                z = norm(z)
+                z = z.transpose(-1, -2)
+
+            # --- 1. 先做局部卷积 (Local Conv) ---
+            # 这替代了你原本最后那个巨大的 Smoother
+            # 让网络自己在每一层学习是否需要平滑，而不是强制平滑
+            z = conv(z) 
+
+            # --- 2. 再做 S4D (Global SSM) ---
+            z, _ = layer(z)
+            
+            # Dropout
+            z = dropout(z)
+            
+            # Residual
+            x = z + residual
+            
+            # --- PostNorm ---
+            if not self.prenorm:
+                x = x.transpose(-1, -2)
+                x = norm(x)
+                x = x.transpose(-1, -2)
+
+        x = x.transpose(-1, -2) # Back to (B, L, Hidden)
+        x = self.decoder(x)
         return x

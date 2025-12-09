@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import os
 import sys
+import string
 from dotenv import load_dotenv
 
 from dmg.core.data.loaders import HydroLoader
@@ -48,9 +49,9 @@ loader.load_dataset()
 # Set the paths to the gage id lists and shapefiles...
 
 def fetch_data(config, metric):
-    GAGE_ID_PATH = os.getenv("GAGE_INFO")  # ./gage_id.npy
-    GAGE_ID_531_PATH = os.getenv("SUBSET_PATH")  # ./531sub_id.txt
-    SHAPEFILE_PATH = r'E:\PaperCode\dpl-project\generic_deltamodel\data\camels_data\camels_loc\camels_671_loc.shp'
+    GAGE_ID_PATH = r"E:\PaperCode\dpl-project\generic_deltamodel\data\gage_id.npy"  # ./gage_id.npy
+    GAGE_ID_531_PATH = r'E:\PaperCode\dpl-project\generic_deltamodel\data\531sub_id.txt'  # ./531sub_id.txt
+    SHAPEFILE_PATH = r'E:\PaperCode\dpl-project\generic_deltamodel\data\camels_loc\camels_671_loc.shp'
     # ------------------------------------------#
 
     # 1. Load gage ids + basin shapefile with geocoordinates (lat, long) for every gage.
@@ -109,35 +110,47 @@ fhv_abs_diff_values = np.where(fhv_abs_diff_values < -20, 20, fhv_abs_diff_value
 kge_diff_values = np.where(kge_diff_values > 0.2, 0.2, kge_diff_values)
 kge_diff_values = np.where(kge_diff_values < -0.2, -0.2, kge_diff_values)
 
-fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4))
 
 plot_distribution_curve(
     ax=ax1,
     data=nse_diff_values,
     data_name='NSE Difference',
-    axislabel_fontsize=18,
-    legend_fontsize=18,
-    text_fontsize=18,
     bins=20
 )
+# plot_distribution_curve(
+#     ax=ax2,
+#     data=kge_diff_values,
+#     data_name='KGE Difference',
+#     bins=20
+# )
 plot_distribution_curve(
     ax=ax2,
-    data=kge_diff_values,
-    data_name='KGE Difference',
-    axislabel_fontsize=18,
-    legend_fontsize=18,
-    text_fontsize=18,
-    bins=20
-)
-plot_distribution_curve(
-    ax=ax3,
     data=fhv_abs_diff_values,
     data_name='|FHV| Difference',
-    axislabel_fontsize=18,
-    legend_fontsize=18,
-    text_fontsize=18,
     line1=-5,
     line2=5,
     bins=20
 )
+for i, ax in enumerate([ax1, ax2]):
+    # 生成序号：(a), (b), (c)...
+    label = f"({string.ascii_lowercase[i]})"
+
+    ax.text(
+        0.02,
+        0.95,  # x, y 位置：0.02是靠左，0.95是靠上 (相对于图框)
+        label,
+        transform=ax.transAxes,  # 使用相对坐标系 (0到1)
+        fontsize=10,  # 字体大小，通常比 tick_fontsize 大一点
+        fontweight="bold",  # 加粗更醒目
+        va="top",  # 垂直对齐：顶部对齐
+        ha="left",  # 水平对齐：左对齐
+        zorder=100,  # 确保文字在最上层
+        bbox=dict(
+            facecolor="white",  # 背景颜色
+            alpha=0.8,  # 透明度 0.8
+            edgecolor="none",  # 无边框线 (如果你想要黑框，这里改成 'black')
+            boxstyle="round,pad=0.2",  # 可选：圆角矩形，pad控制文字周围留白大小
+        ),
+    )
 fig.savefig(os.path.join(os.getenv("PROJ_PATH"), "project/better_estimate/visualize/figures/diff_hist_plot.png"), dpi=300)

@@ -16,7 +16,7 @@ from project.hydro_selection import load_config  # noqa: E402
 
 #------------------------------------------#
 # Define model settings here.
-CONFIG_PATH = r'conf/config_dhbvmoev1_mlp.yaml'
+CONFIG_PATH = r'conf/config_dhbvv2_ann.yaml'
 #------------------------------------------#
 # model training
 config = load_config(CONFIG_PATH)

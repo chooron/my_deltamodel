@@ -6,13 +6,9 @@ import torch.nn.functional as F
 from pytorch_tcn import TCN
 
 from dmg.models.neural_networks.layers.ann import AnnModel
-from dmg.models.neural_networks.layers.ema import (
-    ExponentialMovingAverage,
-    SimpleMovingAverage,
-)
 
 
-class TcnMlpModel(torch.nn.Module):
+class TcnMlpV1Model(torch.nn.Module):
     """LSTM-MLP model for multi-scale learning.
 
     Supports GPU and CPU forwarding.
@@ -77,9 +73,6 @@ class TcnMlpModel(torch.nn.Module):
         self.norm = nn.LayerNorm(hiddeninv1)
         self.tncdrop = nn.Dropout(dr1)
         # self.ema = ExponentialMovingAverage(channels=hiddeninv1, learnable=False)
-        self.ema = SimpleMovingAverage(
-            channels=hiddeninv1, kernel_size=7, per_channel=True
-        )
         self.a = 0.5
         self.fc = nn.Linear(hiddeninv1, ny1)
         self.ann = AnnModel(
@@ -112,8 +105,15 @@ class TcnMlpModel(torch.nn.Module):
         tcn_out = self.tcninv(
             z1.permute(1, 0, 2)
         )  # dim: timesteps, gages, params
-        ema_out = self.ema(self.norm(tcn_out))
         # ema_out = self.norm(tcn_out)
-        fc_out = self.fc(self.tncdrop(ema_out).permute(1, 0, 2))
+        fc_out = self.fc(self.tncdrop(tcn_out).permute(1, 0, 2))
         ann_out = self.ann(z2)
         return 0.5 * (torch.tanh(fc_out * self.a) + 1), F.sigmoid(ann_out)
+
+
+    def predict_timevar_parameters(self, z1):
+        tcn_out = self.tcninv(
+            z1.permute(1, 0, 2)
+        )  # dim: timesteps, gages, params
+        fc_out = self.fc(tcn_out.permute(1, 0, 2))
+        return 0.5 * (torch.tanh(fc_out * self.a) + 1).reshape(fc_out.shape[0], 3, -1)

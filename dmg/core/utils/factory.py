@@ -95,7 +95,7 @@ def load_component(
     )
 
 
-def import_phy_model(model:str, config: dict) -> type:
+def import_phy_model(model: str, config: dict) -> type:
     """Loads a physical model, either from HydroDL2 (hydrology) or locally."""
     if "directory" in config["phy_model"].keys():
         tmp_phy_model_dir = os.path.join(
@@ -103,7 +103,7 @@ def import_phy_model(model:str, config: dict) -> type:
         )
     else:
         tmp_phy_model_dir = phy_model_dir
-        
+
     return load_component(
         model,  # Pass model as name directly
         tmp_phy_model_dir,
@@ -171,7 +171,7 @@ def load_criterion(
     """
     if not name:
         name = config["model"]
-        
+
     # Load the loss function dynamically using the factory.
     cls = load_component(
         name,
@@ -228,10 +228,11 @@ def load_nn_model(
 
     if "directory" in config["nn_model"].keys():
         tmp_nn_model_dir = os.path.join(
-            os.getenv("PROJ_PATH"), config["nn_model"]["directory"]
+            os.getenv("PROJ_PATH", "."), config["nn_model"]["directory"]
         )
     else:
         tmp_nn_model_dir = nn_model_dir
+    print(tmp_nn_model_dir)
 
     # Dynamically retrieve the model
     cls = load_component(

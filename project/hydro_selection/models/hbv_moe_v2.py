@@ -1,10 +1,10 @@
 """
-HBV-MoE 水文模型
+HBV-MoE 水文模型 V2
 
 基于 HBV 概念式水文模型，集成 MoE (Mixture of Experts) 门控网络，
 实现多模型动态加权融合。
 
-说明: 最初始版本,在产流层加入MoE网络然后进行汇流计算。
+说明: v2版本,汇流层使用16组参数进行汇流,然后再通过MoE加权融合
 
 Author: chooron
 """
@@ -19,11 +19,12 @@ from dmg.models.neural_networks.layers.moe import MoeLayer
 from project.hydro_selection.models.core import hbv_timestep_loop
 
 
-class HbvMoeV1(torch.nn.Module):
+class HbvMoeV2(torch.nn.Module):
     """
-    HBV-MoE 水文模型
+    HBV-MoE 水文模型 V2
 
     结合 HBV 物理模型与 MoE 门控网络，支持多模型集成和动态权重分配。
+    V2版本: 汇流层使用 nmul 组参数进行汇流，然后再通过 MoE 加权融合。
 
     Parameters
     ----------
@@ -137,9 +138,10 @@ class HbvMoeV1(torch.nn.Module):
 
         static_count = len(self.phy_param_names) - len(self.dynamic_params)
         self.learnable_param_count1 = len(self.dynamic_params) * self.nmul
+        # 汇流参数也乘以 nmul
         self.learnable_param_count2 = static_count * self.nmul + len(
             self.routing_param_names
-        )
+        ) * self.nmul
         self.learnable_param_count = (
             self.learnable_param_count1 + self.learnable_param_count2
         )
@@ -187,10 +189,26 @@ class HbvMoeV1(torch.nn.Module):
         return result
 
     def _descale_routing_params(self, params: torch.Tensor) -> dict:
-        """汇流参数反缩放"""
+        """汇流参数反缩放 (nmul 组)
+        
+        Parameters
+        ----------
+        params : torch.Tensor
+            形状: (B, routing_param_count * nmul)
+            
+        Returns
+        -------
+        dict
+            每个汇流参数的形状: (B, nmul)
+        """
+        routing_param_count = len(self.routing_parameter_bounds)
+        # reshape to (B, routing_param_count, nmul)
+        params_reshaped = params.view(
+            params.shape[0], routing_param_count, self.nmul
+        )
         return {
             name: change_param_range(
-                params[:, i], self.routing_parameter_bounds[name]
+                params_reshaped[:, i, :], self.routing_parameter_bounds[name]
             )
             for i, name in enumerate(self.routing_parameter_bounds.keys())
         }
@@ -201,6 +219,7 @@ class HbvMoeV1(torch.nn.Module):
         """解包神经网络输出的参数"""
         dy_count = len(self.dynamic_params)
         static_count = len(self.parameter_bounds) - dy_count
+        routing_count = len(self.routing_parameter_bounds)
         raw_phy_dy, raw_phy_static = parameters
 
         # 动态参数: (T, B, dy_count, nmul)
@@ -216,7 +235,7 @@ class HbvMoeV1(torch.nn.Module):
             raw_phy_static.shape[0], static_count, self.nmul
         )
 
-        # 汇流参数
+        # 汇流参数: (B, routing_count * nmul)
         phy_route = raw_phy_static[:, static_count * self.nmul :]
 
         return phy_dy, phy_static, phy_route
@@ -346,17 +365,15 @@ class HbvMoeV1(torch.nn.Module):
         )
 
     def _apply_moe_weighting(
-        self, Qsimmu: torch.Tensor, n_steps: int
+        self, Qsimmu: torch.Tensor
     ) -> torch.Tensor:
-        """MoE 动态加权
+        """MoE 动态加权（汇流后）
         
         Parameters
         ----------
         Qsimmu : torch.Tensor
-            各专家模型的流量输出，形状: (T, B, E) 
+            各专家模型汇流后的流量输出，形状: (T, B, E) 
             T=时间步, B=流域数, E=专家数(nmul)
-        n_steps : int
-            时间步数
             
         Returns
         -------
@@ -377,24 +394,80 @@ class HbvMoeV1(torch.nn.Module):
             self.moe_weights = None
             return Qsimmu.mean(-1)
 
-    def _apply_routing(
-        self, Qsim: torch.Tensor, Q_components: list, n_steps: int, n_grid: int
-    ) -> tuple:
-        """应用汇流演算"""
-        UH = uh_gamma(
-            self.routing_param_dict["rout_a"].repeat(n_steps, 1).unsqueeze(-1),
-            self.routing_param_dict["rout_b"].repeat(n_steps, 1).unsqueeze(-1),
+    def _compute_single_routing(
+        self, Qsim_i: torch.Tensor, rout_a_i: torch.Tensor, 
+        rout_b_i: torch.Tensor, n_steps: int
+    ) -> torch.Tensor:
+        """计算单组汇流（用于并行调用）
+        
+        Parameters
+        ----------
+        Qsim_i : torch.Tensor
+            第 i 组产流，形状: (T, B)
+        rout_a_i : torch.Tensor
+            第 i 组汇流参数 a，形状: (B,)
+        rout_b_i : torch.Tensor
+            第 i 组汇流参数 b，形状: (B,)
+        n_steps : int
+            时间步数
+            
+        Returns
+        -------
+        torch.Tensor
+            汇流结果，形状: (T, B)
+        """
+        # 计算 UH
+        UH_i = uh_gamma(
+            rout_a_i.repeat(n_steps, 1).unsqueeze(-1),  # (T, B, 1)
+            rout_b_i.repeat(n_steps, 1).unsqueeze(-1),  # (T, B, 1)
             lenF=15,
-        ).permute([1, 2, 0])
+        ).permute([1, 2, 0])  # (B, 1, lenF)
+        
+        # 卷积汇流
+        rf_i = Qsim_i.unsqueeze(-1).permute([1, 2, 0])  # (B, 1, T)
+        Qsrout_i = uh_conv(rf_i, UH_i).permute([2, 0, 1])  # (T, B, 1)
+        return Qsrout_i.squeeze(-1)  # (T, B)
 
-        def route(q):
-            rf = q.mean(-1, keepdim=True).permute([1, 2, 0])
-            return uh_conv(rf, UH).permute([2, 0, 1])
-
-        rf = torch.unsqueeze(Qsim, -1).permute([1, 2, 0])
-        Qsrout = uh_conv(rf, UH).permute([2, 0, 1])
-        Q0_rout, Q1_rout, Q2_rout = [route(q) for q in Q_components]
-        return Qsrout, Q0_rout, Q1_rout, Q2_rout
+    def _apply_routing(
+        self, Qsim: torch.Tensor, n_steps: int, n_grid: int
+    ) -> torch.Tensor:
+        """应用汇流演算（并行计算所有 nmul 组）
+        
+        Parameters
+        ----------
+        Qsim : torch.Tensor
+            产流输出，形状: (T, B, E)，E=nmul
+        n_steps : int
+            时间步数
+        n_grid : int
+            流域数
+            
+        Returns
+        -------
+        torch.Tensor
+            汇流后的输出，形状: (T, B, E)
+        """
+        # 使用 torch.jit.fork 实现并行计算
+        futures = []
+        for i in range(self.nmul):
+            # 提取第 i 组数据
+            Qsim_i = Qsim[:, :, i]  # (T, B)
+            rout_a_i = self.routing_param_dict["rout_a"][:, i]  # (B,)
+            rout_b_i = self.routing_param_dict["rout_b"][:, i]  # (B,)
+            
+            # 异步提交任务
+            future = torch.jit.fork(
+                self._compute_single_routing, 
+                Qsim_i, rout_a_i, rout_b_i, n_steps
+            )
+            futures.append(future)
+        
+        # 等待所有任务完成并收集结果
+        Qsrout_list = [torch.jit.wait(f) for f in futures]
+        
+        # 堆叠为 (T, B, E)
+        Qsrout = torch.stack(Qsrout_list, dim=-1)
+        return Qsrout
 
     def _finalize_output(
         self,
@@ -402,7 +475,10 @@ class HbvMoeV1(torch.nn.Module):
         n_steps,
         n_grid,
     ) -> dict:
-        """整理最终输出"""
+        """整理最终输出
+        
+        流程: 产流 -> 汇流(16组) -> MoE加权融合
+        """
         (
             Qsim_out,
             Q0_out,
@@ -420,18 +496,18 @@ class HbvMoeV1(torch.nn.Module):
             soil_wetness_out,
             PET,
         ) = output
-        Qsimavg = self._apply_moe_weighting(Qsim_out, n_steps)
-        Qsim = Qsimavg
-        Qs, Q0_rout, Q1_rout, Q2_rout = self._apply_routing(
-            Qsim, [Q0_out, Q1_out, Q2_out], n_steps, n_grid
-        )
+        
+        # 1. 先对每组产流分别进行汇流 (T, B, E)
+        Qsrout = self._apply_routing(Qsim_out, n_steps, n_grid)
+        
+        # 2. 汇流后通过 MoE 加权融合 (T, B)
+        Qs = self._apply_moe_weighting(Qsrout)
 
         # 构建输出字典
         result = {
-            "streamflow": Qs,
-            "srflow": Q0_rout,
-            "ssflow": Q1_rout,
-            "gwflow": Q2_rout,
+            "streamflow": Qs.unsqueeze(-1),  # (T, B, 1)
+            "Qsimmu": Qsim_out,  # 产流 (T, B, E)
+            "Qsrout": Qsrout,  # 汇流后 (T, B, E)
             "AET_hydro": AET_out.mean(-1, keepdim=True),
             "PET_hydro": PET.mean(-1, keepdim=True),
             "SWE": SWE_out.mean(-1, keepdim=True),
@@ -445,7 +521,6 @@ class HbvMoeV1(torch.nn.Module):
             "percolation": PERC_out.mean(-1, keepdim=True),
             "soilwater": SM_out.mean(-1, keepdim=True),
             "capillary": capillary_out.mean(-1, keepdim=True),
-            "Qsimmu": Qsim_out,
         }
 
         if self.moe_weights is not None:
@@ -458,3 +533,70 @@ class HbvMoeV1(torch.nn.Module):
                     result[key] = result[key][self.pred_cutoff :]
 
         return result
+
+
+if __name__ == "__main__":
+    # 测试代码
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # 模型配置
+    config = {
+        "warm_up": 365,
+        "warm_up_states": False,
+        "nmul": 16,
+        "nearzero": 1e-5,
+        "use_moe": True,
+        "moe_embed_dim": 64,
+        "moe_smoothing_k": 11,
+        "moe_target_points": 730,
+    }
+    
+    # 初始化模型
+    model = HbvMoeV2(config=config, device=device)
+    model.to(device)
+    
+    print(f"Model name: {model.name}")
+    print(f"nmul: {model.nmul}")
+    print(f"learnable_param_count: {model.learnable_param_count}")
+    print(f"  - learnable_param_count1 (dynamic): {model.learnable_param_count1}")
+    print(f"  - learnable_param_count2 (static + routing): {model.learnable_param_count2}")
+    
+    # 模拟输入数据
+    batch_size = 10
+    n_steps = 730
+    n_features = 3  # prcp, tmean, pet
+    
+    # 物理输入
+    x_phy = torch.rand(n_steps, batch_size, n_features, device=device)
+    x_dict = {"x_phy": x_phy}
+    
+    # 神经网络输出的参数
+    # dynamic params: None (不使用动态参数)
+    # static params: (B, learnable_param_count2)
+    raw_phy_dy = None
+    raw_phy_static = torch.rand(batch_size, model.learnable_param_count2, device=device)
+    parameters = (raw_phy_dy, raw_phy_static)
+    
+    print(f"\nInput shapes:")
+    print(f"  x_phy: {x_phy.shape}")
+    print(f"  raw_phy_static: {raw_phy_static.shape}")
+    
+    # 前向传播
+    with torch.no_grad():
+        output = model(x_dict, parameters)
+    
+    print(f"\nOutput shapes:")
+    for key, value in output.items():
+        if value is not None:
+            print(f"  {key}: {value.shape}")
+    
+    # 验证 MoE 权重
+    if "moe_weights" in output and output["moe_weights"] is not None:
+        moe_weights = output["moe_weights"]
+        print(f"\nMoE weights stats:")
+        print(f"  Shape: {moe_weights.shape}")
+        print(f"  Sum per timestep (should be ~1): {moe_weights.sum(dim=-1).mean().item():.4f}")
+        print(f"  Min: {moe_weights.min().item():.4f}, Max: {moe_weights.max().item():.4f}")
+    
+    print("\n✓ Test passed!")

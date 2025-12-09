@@ -137,7 +137,6 @@ class Trainer(BaseTrainer):
 
         # Initialize
         try:
-            print(self.config['train'].get('weight_decay', 0.0))
             self.optimizer = cls(
                 self.model.get_parameters(),
                 lr=self.config['train']['learning_rate'],

@@ -1,10 +1,12 @@
 """
-HBV-MoE 水文模型
+ABCD 水文模型 (DPL 版本)
 
-基于 HBV 概念式水文模型，集成 MoE (Mixture of Experts) 门控网络，
-实现多模型动态加权融合。
+基于 Thomas (1981) 提出的 ABCD 概念式水文模型。
+这是一个简洁的四参数水文模型，适用于月尺度模拟。
 
-说明: 最初始版本,在产流层加入MoE网络然后进行汇流计算。
+参考文献:
+    Thomas, H. A. (1981). Improved methods for national water assessment.
+    Report WR15249270, US Water Resources Council, Washington, DC.
 
 Author: chooron
 """
@@ -13,17 +15,31 @@ from typing import Any, Optional, Union
 
 import torch
 import torch.nn as nn
+
 from dmg.models.hydrodl2 import change_param_range, uh_conv, uh_gamma
-from dmg.models.neural_networks.layers.moe import MoeLayer
 
-from project.hydro_selection.models.core import hbv_timestep_loop
+# 导入核心计算函数
+try:
+    from .core import abcd_timestep_loop
+except ImportError:
+    from core import abcd_timestep_loop
 
 
-class HbvMoeV1(torch.nn.Module):
+class Abcd(torch.nn.Module):
     """
-    HBV-MoE 水文模型
+    ABCD 水文模型 (DPL 版本)
 
-    结合 HBV 物理模型与 MoE 门控网络，支持多模型集成和动态权重分配。
+    四参数概念式水文模型，包含土壤水分模块和地下水模块。
+
+    模型结构:
+    - 参数 a: 控制径流产生的倾向 (0 < a ≤ 1)
+    - 参数 b: 土壤蓄水容量上限 [mm]
+    - 参数 c: 地下水补给比例 (0 ≤ c ≤ 1)
+    - 参数 d: 地下水退水系数 (0 < d < 1)
+
+    状态变量:
+    - S: 土壤蓄水 [mm]
+    - G: 地下水蓄水 [mm]
 
     Parameters
     ----------
@@ -35,24 +51,18 @@ class HbvMoeV1(torch.nn.Module):
 
     # 物理参数边界
     PARAM_BOUNDS = {
-        "parBETA": [1.0, 6.0],
-        "parFC": [50, 1000],
-        "parK0": [0.05, 0.9],
-        "parK1": [0.01, 0.5],
-        "parK2": [0.001, 0.2],
-        "parLP": [0.2, 1],
-        "parPERC": [0, 10],
-        "parUZL": [0, 100],
-        "parTT": [-2.5, 2.5],
-        "parCFMAX": [0.5, 10],
-        "parCFR": [0, 0.1],
-        "parCWH": [0, 0.2],
-        "parBETAET": [0.3, 5],
-        "parC": [0, 1],
-        "parRT": [0, 20],
-        "parAC": [0, 2500],
+        "a": [0.1, 1.0],      # 径流产生倾向
+        "b": [50, 500],       # 土壤蓄水容量上限 [mm]
+        "c": [0.0, 1.0],      # 地下水补给比例
+        "d": [0.01, 0.9],     # 地下水退水系数
     }
     ROUTING_BOUNDS = {"rout_a": [0, 2.9], "rout_b": [0, 6.5]}
+
+    # 初始状态
+    INITIAL_STATES = {
+        "S": 50.0,   # 初始土壤蓄水 [mm]
+        "G": 10.0,   # 初始地下水蓄水 [mm]
+    }
 
     def __init__(
         self,
@@ -62,27 +72,21 @@ class HbvMoeV1(torch.nn.Module):
         super().__init__()
 
         # 默认配置
-        self.name = "HBV-MoE"
+        self.name = "ABCD"
         self.config = config
         self.initialize = False
         self.warm_up = 0
         self.pred_cutoff = 0
         self.warm_up_states = True
         self.dynamic_params = []
-        self.variables = ["prcp", "tmean", "pet"]
+        self.variables = ["prcp", "pet"]
         self.nearzero = 1e-5
         self.nmul = 1
-
-        # MoE 配置
-        self.use_moe = True
-        self.moe_embed_dim = 64
-        self.moe_smoothing_k = 11
-        self.moe_target_points = 730  # 最大时间步长，需要足够大以支持各种输入长度
-        self.moe_weights = None
 
         # 参数边界
         self.parameter_bounds = self.PARAM_BOUNDS
         self.routing_parameter_bounds = self.ROUTING_BOUNDS
+        self.initial_states = self.INITIAL_STATES
 
         # 设备配置
         self.device = device or torch.device(
@@ -94,18 +98,6 @@ class HbvMoeV1(torch.nn.Module):
             self._load_config(config)
 
         self._set_parameters()
-        
-        # 直接初始化 MoE 层
-        self.moe_layer = MoeLayer(
-            enc_in=1,
-            num_experts=self.nmul,
-            target_points=self.moe_target_points,
-            embed_dim=self.moe_embed_dim,
-            smoothing_k=self.moe_smoothing_k,
-            num_layers=2,
-            num_heads=4,
-            causal=True,
-        ).to(self.device)
 
     def _load_config(self, config: dict) -> None:
         """从配置字典加载参数"""
@@ -116,10 +108,6 @@ class HbvMoeV1(torch.nn.Module):
             "routing",
             "nearzero",
             "nmul",
-            "use_moe",
-            "moe_embed_dim",
-            "moe_smoothing_k",
-            "moe_target_points",
         ]
         for attr in simple_attrs:
             if attr in config:
@@ -144,13 +132,14 @@ class HbvMoeV1(torch.nn.Module):
             self.learnable_param_count1 + self.learnable_param_count2
         )
 
-    def _init_state(self, n_grid: int) -> torch.Tensor:
+    def _init_state(self, n_grid: int, state_name: str) -> torch.Tensor:
         """初始化状态张量"""
+        init_value = self.initial_states.get(state_name, self.nearzero)
         return (
             torch.zeros(
                 [n_grid, self.nmul], dtype=torch.float32, device=self.device
             )
-            + self.nearzero
+            + init_value
         )
 
     def _init_output(self, shape: tuple) -> torch.Tensor:
@@ -239,7 +228,8 @@ class HbvMoeV1(torch.nn.Module):
         n_grid = x.size(1)
 
         # 初始化状态
-        states = [self._init_state(n_grid) for _ in range(5)]
+        S = self._init_state(n_grid, "S")  # 土壤蓄水
+        G = self._init_state(n_grid, "G")  # 地下水蓄水
 
         # 反缩放参数
         static_names = [
@@ -253,27 +243,22 @@ class HbvMoeV1(torch.nn.Module):
             phy_static, static_names, self.parameter_bounds
         )
 
-        return self._run_model(x, states, phy_dy_dict, phy_static_dict)
+        return self._run_model(x, S, G, phy_dy_dict, phy_static_dict)
 
     def _run_model(
         self,
         forcing: torch.Tensor,
-        states: list,
+        S: torch.Tensor,
+        G: torch.Tensor,
         dy_params: dict,
         static_params: dict,
     ) -> Union[tuple, dict[str, torch.Tensor]]:
-        """HBV 模型核心计算（使用 JIT 优化的时间步循环）"""
-        SNOWPACK, MELTWATER, SM, SUZ, SLZ = states
+        """ABCD 模型核心计算（使用 JIT 优化的时间步循环）"""
         n_steps, n_grid = forcing.shape[:2]
 
         # 提取并扩展驱动数据
         P = (
             forcing[:, :, self.variables.index("prcp")]
-            .unsqueeze(2)
-            .repeat(1, 1, self.nmul)
-        )
-        T = (
-            forcing[:, :, self.variables.index("tmean")]
             .unsqueeze(2)
             .repeat(1, 1, self.nmul)
         )
@@ -284,7 +269,6 @@ class HbvMoeV1(torch.nn.Module):
         )
 
         # 准备参数：对于动态参数保持 (T, B, E)，静态参数保持 (B, E)
-        # JIT 函数内部会根据维度判断是否为动态参数
         def get_param(name: str) -> torch.Tensor:
             if name in dy_params:
                 return dy_params[name]  # (T, B, E)
@@ -293,49 +277,32 @@ class HbvMoeV1(torch.nn.Module):
         
         # 调用 JIT 优化的时间步循环
         (
-            Qsim_out, Q0_out, Q1_out, Q2_out, AET_out, recharge_out, excs_out,
-            evapfactor_out, tosoil_out, PERC_out, SWE_out, SM_out, capillary_out,
-            soil_wetness_out, SNOWPACK_final, MELTWATER_final, SM_final, 
-            SUZ_final, SLZ_final
-        ) = hbv_timestep_loop(
-            P, T, PET,
-            SNOWPACK, MELTWATER, SM, SUZ, SLZ,
-            get_param("parTT"),
-            get_param("parCFMAX"),
-            get_param("parCFR"),
-            get_param("parCWH"),
-            get_param("parFC"),
-            get_param("parBETA"),
-            get_param("parLP"),
-            get_param("parBETAET"),
-            get_param("parC"),
-            get_param("parPERC"),
-            get_param("parK0"),
-            get_param("parK1"),
-            get_param("parK2"),
-            get_param("parUZL"),
+            Qsim_out, Qsurf_out, Qgw_out, AET_out,
+            S_out, G_out, W_out, Y_out,
+            S_final, G_final
+        ) = abcd_timestep_loop(
+            P, PET,
+            S, G,
+            get_param("a"),
+            get_param("b"),
+            get_param("c"),
+            get_param("d"),
             self.nearzero,
         )
 
         # 处理初始化模式
         if self.initialize:
-            return SNOWPACK_final, MELTWATER_final, SM_final, SUZ_final, SLZ_final
+            return S_final, G_final
 
         output = (
             Qsim_out,
-            Q0_out,
-            Q1_out,
-            Q2_out,
+            Qsurf_out,
+            Qgw_out,
             AET_out,
-            recharge_out,
-            excs_out,
-            evapfactor_out,
-            tosoil_out,
-            PERC_out,
-            SWE_out,
-            SM_out,
-            capillary_out,
-            soil_wetness_out,
+            S_out,
+            G_out,
+            W_out,
+            Y_out,
             PET,
         )
 
@@ -345,37 +312,23 @@ class HbvMoeV1(torch.nn.Module):
             n_grid,
         )
 
-    def _apply_moe_weighting(
-        self, Qsimmu: torch.Tensor, n_steps: int
+    def _apply_averaging(
+        self, Qsimmu: torch.Tensor
     ) -> torch.Tensor:
-        """MoE 动态加权
+        """多模型平均
         
         Parameters
         ----------
         Qsimmu : torch.Tensor
-            各专家模型的流量输出，形状: (T, B, E) 
-            T=时间步, B=流域数, E=专家数(nmul)
-        n_steps : int
-            时间步数
+            各模型的流量输出，形状: (T, B, E) 
+            T=时间步, B=流域数, E=模型数(nmul)
             
         Returns
         -------
         torch.Tensor
-            加权后的流量，形状: (T, B)
+            平均后的流量，形状: (T, B)
         """
-        if self.use_moe and self.nmul > 1:
-            # MoeLayer 期望输入形状: (Seq, Batch, NumExperts, Feature)
-            # Qsimmu 形状: (T, B, E) -> 需要添加 Feature 维度
-            moe_input = Qsimmu.unsqueeze(-1)  # (T, B, E, 1)
-            # 获取门控权重，形状: (T, B, E, 1)
-            gating_weights = self.moe_layer(moe_input)
-            # 保存权重（去掉最后一维）用于分析
-            self.moe_weights = gating_weights.squeeze(-1)  # (T, B, E)
-            # 加权求和: (T, B, E, 1) * (T, B, E, 1) -> sum over E -> (T, B, 1) -> (T, B)
-            return (gating_weights * moe_input).sum(dim=2).squeeze(-1)
-        else:
-            self.moe_weights = None
-            return Qsimmu.mean(-1)
+        return Qsimmu.mean(-1)
 
     def _apply_routing(
         self, Qsim: torch.Tensor, Q_components: list, n_steps: int, n_grid: int
@@ -393,8 +346,8 @@ class HbvMoeV1(torch.nn.Module):
 
         rf = torch.unsqueeze(Qsim, -1).permute([1, 2, 0])
         Qsrout = uh_conv(rf, UH).permute([2, 0, 1])
-        Q0_rout, Q1_rout, Q2_rout = [route(q) for q in Q_components]
-        return Qsrout, Q0_rout, Q1_rout, Q2_rout
+        Qsurf_rout, Qgw_rout = [route(q) for q in Q_components]
+        return Qsrout, Qsurf_rout, Qgw_rout
 
     def _finalize_output(
         self,
@@ -405,51 +358,37 @@ class HbvMoeV1(torch.nn.Module):
         """整理最终输出"""
         (
             Qsim_out,
-            Q0_out,
-            Q1_out,
-            Q2_out,
+            Qsurf_out,
+            Qgw_out,
             AET_out,
-            recharge_out,
-            excs_out,
-            evapfactor_out,
-            tosoil_out,
-            PERC_out,
-            SWE_out,
-            SM_out,
-            capillary_out,
-            soil_wetness_out,
+            S_out,
+            G_out,
+            W_out,
+            Y_out,
             PET,
         ) = output
-        Qsimavg = self._apply_moe_weighting(Qsim_out, n_steps)
+        
+        Qsimavg = self._apply_averaging(Qsim_out)
         Qsim = Qsimavg
-        Qs, Q0_rout, Q1_rout, Q2_rout = self._apply_routing(
-            Qsim, [Q0_out, Q1_out, Q2_out], n_steps, n_grid
+        Qs, Qsurf_rout, Qgw_rout = self._apply_routing(
+            Qsim, [Qsurf_out, Qgw_out], n_steps, n_grid
         )
 
         # 构建输出字典
         result = {
             "streamflow": Qs,
-            "srflow": Q0_rout,
-            "ssflow": Q1_rout,
-            "gwflow": Q2_rout,
+            "surface_runoff": Qsurf_rout,
+            "groundwater_flow": Qgw_rout,
             "AET_hydro": AET_out.mean(-1, keepdim=True),
             "PET_hydro": PET.mean(-1, keepdim=True),
-            "SWE": SWE_out.mean(-1, keepdim=True),
-            "srflow_no_rout": Q0_out.mean(-1, keepdim=True),
-            "ssflow_no_rout": Q1_out.mean(-1, keepdim=True),
-            "gwflow_no_rout": Q2_out.mean(-1, keepdim=True),
-            "recharge": recharge_out.mean(-1, keepdim=True),
-            "excs": excs_out.mean(-1, keepdim=True),
-            "evapfactor": evapfactor_out.mean(-1, keepdim=True),
-            "tosoil": tosoil_out.mean(-1, keepdim=True),
-            "percolation": PERC_out.mean(-1, keepdim=True),
-            "soilwater": SM_out.mean(-1, keepdim=True),
-            "capillary": capillary_out.mean(-1, keepdim=True),
+            "surface_runoff_no_rout": Qsurf_out.mean(-1, keepdim=True),
+            "gwflow_no_rout": Qgw_out.mean(-1, keepdim=True),
+            "soil_storage": S_out.mean(-1, keepdim=True),
+            "gw_storage": G_out.mean(-1, keepdim=True),
+            "available_water": W_out.mean(-1, keepdim=True),
+            "evap_opportunity": Y_out.mean(-1, keepdim=True),
             "Qsimmu": Qsim_out,
         }
-
-        if self.moe_weights is not None:
-            result["moe_weights"] = self.moe_weights
 
         # 裁剪预热期
         if not self.warm_up_states:
@@ -458,3 +397,59 @@ class HbvMoeV1(torch.nn.Module):
                     result[key] = result[key][self.pred_cutoff :]
 
         return result
+
+
+if __name__ == "__main__":
+    # 测试代码
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # 模型配置
+    config = {
+        "warm_up": 365,
+        "warm_up_states": False,
+        "nmul": 16,
+        "nearzero": 1e-5,
+    }
+    
+    # 初始化模型
+    model = Abcd(config=config, device=device)
+    model.to(device)
+    
+    print(f"Model name: {model.name}")
+    print(f"nmul: {model.nmul}")
+    print(f"learnable_param_count: {model.learnable_param_count}")
+    print(f"  - learnable_param_count1 (dynamic): {model.learnable_param_count1}")
+    print(f"  - learnable_param_count2 (static + routing): {model.learnable_param_count2}")
+    print(f"Parameters: {model.phy_param_names}")
+    
+    # 模拟输入数据
+    batch_size = 10
+    n_steps = 730
+    n_features = 2  # prcp, pet
+    
+    # 物理输入
+    x_phy = torch.rand(n_steps, batch_size, n_features, device=device)
+    x_dict = {"x_phy": x_phy}
+    
+    # 神经网络输出的参数
+    # dynamic params: None (不使用动态参数)
+    # static params: (B, learnable_param_count2)
+    raw_phy_dy = None
+    raw_phy_static = torch.rand(batch_size, model.learnable_param_count2, device=device)
+    parameters = (raw_phy_dy, raw_phy_static)
+    
+    print(f"\nInput shapes:")
+    print(f"  x_phy: {x_phy.shape}")
+    print(f"  raw_phy_static: {raw_phy_static.shape}")
+    
+    # 前向传播
+    with torch.no_grad():
+        output = model(x_dict, parameters)
+    
+    print(f"\nOutput shapes:")
+    for key, value in output.items():
+        if value is not None:
+            print(f"  {key}: {value.shape}")
+    
+    print("\n✓ Test passed!")

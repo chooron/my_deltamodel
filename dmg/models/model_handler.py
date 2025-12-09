@@ -152,13 +152,12 @@ class ModelHandler(torch.nn.Module):
                         )                    )
                     self.ensemble_generator.to(self.device)
                 else:
-                    self.model_dict[name].load_state_dict(
-                        torch.load(
-                            path,
-                            weights_only=True,
-                            map_location=self.device,
-                        ),
+                    state_dict = torch.load(
+                        path,
+                        weights_only=False,
+                        map_location=self.device,
                     )
+                    self.model_dict[name].load_state_dict(state_dict)
                     self.model_dict[name].to(self.device)
 
                     # Overwrite internal config if there is discontinuity:
@@ -387,7 +386,9 @@ class ModelHandler(torch.nn.Module):
             Epoch number to save model at.
         """
         for name, model in self.model_dict.items():
+            # Save full DplModel state dict (includes nn_model and phy_model)
             save_model(self.config, model, name, epoch)
+        
         if self.is_ensemble:
             save_model(self.config, self.ensemble_generator, 'wNN', epoch)
 

@@ -4,9 +4,9 @@
 experiment_name: lstm_benchmark
 
 # files to specify training, validation and test basins (relative to code root or absolute path)
-train_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\531sub_id.txt
-validation_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\531sub_id.txt
-test_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\531sub_id.txt
+train_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\gage_id.txt
+validation_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\gage_id.txt
+test_basin_file: E:\PaperCode\dpl-project\generic_deltamodel\project\better_estimate\conf\other\gage_id.txt
 
 # training, validation and test time periods (format = 'dd/mm/yyyy')
 train_start_date: "01/10/1980"
@@ -101,7 +101,7 @@ log_tensorboard: True
 log_n_figures: 1
 
 # Save model weights every n epochs
-save_weights_every: 1
+save_weights_every: 5
 
 # --- Data configurations --------------------------------------------------------------------------
 

@@ -1,10 +1,7 @@
 """
-HBV-MoE 水文模型
+HBV 水文模型
 
-基于 HBV 概念式水文模型，集成 MoE (Mixture of Experts) 门控网络，
-实现多模型动态加权融合。
-
-说明: 最初始版本,在产流层加入MoE网络然后进行汇流计算。
+基于 HBV 概念式水文模型的实现。
 
 Author: chooron
 """
@@ -14,16 +11,15 @@ from typing import Any, Optional, Union
 import torch
 import torch.nn as nn
 from dmg.models.hydrodl2 import change_param_range, uh_conv, uh_gamma
-from dmg.models.neural_networks.layers.moe import MoeLayer
 
-from project.hydro_selection.models.core import hbv_timestep_loop
+from .core import hbv_timestep_loop
 
 
-class HbvMoeV1(torch.nn.Module):
+class Hbv(torch.nn.Module):
     """
-    HBV-MoE 水文模型
+    HBV 水文模型
 
-    结合 HBV 物理模型与 MoE 门控网络，支持多模型集成和动态权重分配。
+    经典 HBV 物理模型实现，支持多模型集成。
 
     Parameters
     ----------
@@ -62,7 +58,7 @@ class HbvMoeV1(torch.nn.Module):
         super().__init__()
 
         # 默认配置
-        self.name = "HBV-MoE"
+        self.name = "HBV"
         self.config = config
         self.initialize = False
         self.warm_up = 0
@@ -72,13 +68,6 @@ class HbvMoeV1(torch.nn.Module):
         self.variables = ["prcp", "tmean", "pet"]
         self.nearzero = 1e-5
         self.nmul = 1
-
-        # MoE 配置
-        self.use_moe = True
-        self.moe_embed_dim = 64
-        self.moe_smoothing_k = 11
-        self.moe_target_points = 730  # 最大时间步长，需要足够大以支持各种输入长度
-        self.moe_weights = None
 
         # 参数边界
         self.parameter_bounds = self.PARAM_BOUNDS
@@ -94,18 +83,6 @@ class HbvMoeV1(torch.nn.Module):
             self._load_config(config)
 
         self._set_parameters()
-        
-        # 直接初始化 MoE 层
-        self.moe_layer = MoeLayer(
-            enc_in=1,
-            num_experts=self.nmul,
-            target_points=self.moe_target_points,
-            embed_dim=self.moe_embed_dim,
-            smoothing_k=self.moe_smoothing_k,
-            num_layers=2,
-            num_heads=4,
-            causal=True,
-        ).to(self.device)
 
     def _load_config(self, config: dict) -> None:
         """从配置字典加载参数"""
@@ -116,10 +93,6 @@ class HbvMoeV1(torch.nn.Module):
             "routing",
             "nearzero",
             "nmul",
-            "use_moe",
-            "moe_embed_dim",
-            "moe_smoothing_k",
-            "moe_target_points",
         ]
         for attr in simple_attrs:
             if attr in config:
@@ -284,7 +257,6 @@ class HbvMoeV1(torch.nn.Module):
         )
 
         # 准备参数：对于动态参数保持 (T, B, E)，静态参数保持 (B, E)
-        # JIT 函数内部会根据维度判断是否为动态参数
         def get_param(name: str) -> torch.Tensor:
             if name in dy_params:
                 return dy_params[name]  # (T, B, E)
@@ -345,37 +317,23 @@ class HbvMoeV1(torch.nn.Module):
             n_grid,
         )
 
-    def _apply_moe_weighting(
-        self, Qsimmu: torch.Tensor, n_steps: int
+    def _apply_averaging(
+        self, Qsimmu: torch.Tensor
     ) -> torch.Tensor:
-        """MoE 动态加权
+        """多模型平均
         
         Parameters
         ----------
         Qsimmu : torch.Tensor
-            各专家模型的流量输出，形状: (T, B, E) 
-            T=时间步, B=流域数, E=专家数(nmul)
-        n_steps : int
-            时间步数
+            各模型的流量输出，形状: (T, B, E) 
+            T=时间步, B=流域数, E=模型数(nmul)
             
         Returns
         -------
         torch.Tensor
-            加权后的流量，形状: (T, B)
+            平均后的流量，形状: (T, B)
         """
-        if self.use_moe and self.nmul > 1:
-            # MoeLayer 期望输入形状: (Seq, Batch, NumExperts, Feature)
-            # Qsimmu 形状: (T, B, E) -> 需要添加 Feature 维度
-            moe_input = Qsimmu.unsqueeze(-1)  # (T, B, E, 1)
-            # 获取门控权重，形状: (T, B, E, 1)
-            gating_weights = self.moe_layer(moe_input)
-            # 保存权重（去掉最后一维）用于分析
-            self.moe_weights = gating_weights.squeeze(-1)  # (T, B, E)
-            # 加权求和: (T, B, E, 1) * (T, B, E, 1) -> sum over E -> (T, B, 1) -> (T, B)
-            return (gating_weights * moe_input).sum(dim=2).squeeze(-1)
-        else:
-            self.moe_weights = None
-            return Qsimmu.mean(-1)
+        return Qsimmu.mean(-1)
 
     def _apply_routing(
         self, Qsim: torch.Tensor, Q_components: list, n_steps: int, n_grid: int
@@ -420,7 +378,7 @@ class HbvMoeV1(torch.nn.Module):
             soil_wetness_out,
             PET,
         ) = output
-        Qsimavg = self._apply_moe_weighting(Qsim_out, n_steps)
+        Qsimavg = self._apply_averaging(Qsim_out)
         Qsim = Qsimavg
         Qs, Q0_rout, Q1_rout, Q2_rout = self._apply_routing(
             Qsim, [Q0_out, Q1_out, Q2_out], n_steps, n_grid
@@ -433,6 +391,11 @@ class HbvMoeV1(torch.nn.Module):
             "ssflow": Q1_rout,
             "gwflow": Q2_rout,
             "AET_hydro": AET_out.mean(-1, keepdim=True),
+            "AET_full": AET_out,
+            "SM_full": SM_out,
+            "soilwetness_full": soil_wetness_out,
+            "tosoil_full": tosoil_out,
+            "recharge_full": recharge_out,
             "PET_hydro": PET.mean(-1, keepdim=True),
             "SWE": SWE_out.mean(-1, keepdim=True),
             "srflow_no_rout": Q0_out.mean(-1, keepdim=True),
@@ -447,9 +410,6 @@ class HbvMoeV1(torch.nn.Module):
             "capillary": capillary_out.mean(-1, keepdim=True),
             "Qsimmu": Qsim_out,
         }
-
-        if self.moe_weights is not None:
-            result["moe_weights"] = self.moe_weights
 
         # 裁剪预热期
         if not self.warm_up_states:

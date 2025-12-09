@@ -37,6 +37,8 @@ loader = HydroLoader(config, test_split=True, overwrite=False)
 loader.load_dataset()
 eval_dataset = loader.eval_dataset
 model_input = eval_dataset["xc_nn_norm"]
+
+
 selected_basins = np.load(os.path.join(os.getenv("DATA_PATH"), "gage_id.npy"))
 
 
@@ -70,26 +72,31 @@ def get_timevar_parameters(
     return timevar_params
 
 
-hope_config = load_config(r"conf/config_dhbv_hopev2.yaml")
+# 加载三个模型配置
+tcn_config = load_config(r"conf/config_dhbv_tcn.yaml")
+transformer_config = load_config(r"conf/config_dhbv_transformer.yaml")
+tsmixer_config = load_config(r"conf/config_dhbv_tsmixer.yaml")
+
 # basin_id = 1466500 # 2983-730*2:2983
 # select_idx = (2983-730, 2983)
-basin_id = 6431500 # 4810-730*2:4810
-select_idx1 = (2983-730, 2983)
-select_idx2 = (4810-730, 4810)
-start_time1 = datetime(1995, 10, 1) + timedelta(days=select_idx1[0])
-start_time2 = datetime(1995, 10, 1) + timedelta(days=select_idx2[0])
-time_range1 = pd.date_range(
-    start_time1, freq="d", periods=select_idx1[1] - select_idx1[0]
+basin_id = 4105700 # 4810-730*2:4810
+select_idx = (4810-730, 4810)
+start_time = datetime(1995, 10, 1) + timedelta(days=select_idx[0])
+time_range = pd.date_range(
+    start_time, freq="d", periods=select_idx[1] - select_idx[0]
 )
-time_range2 = pd.date_range(
-    start_time2, freq="d", periods=select_idx2[1] - select_idx2[0]
+
+# 获取三个模型的时变参数
+tcn_timevar_params = get_timevar_parameters(
+    tcn_config, 100, basin_id, select_idx=select_idx
 )
-hope_timevar_params1 = get_timevar_parameters(
-    hope_config, 100, 1466500, select_idx=select_idx1
+transformer_timevar_params = get_timevar_parameters(
+    transformer_config, 100, basin_id, select_idx=select_idx
 )
-hope_timevar_params2 = get_timevar_parameters(
-    hope_config, 100, 6431500, select_idx=select_idx2
+tsmixer_timevar_params = get_timevar_parameters(
+    tsmixer_config, 100, basin_id, select_idx=select_idx
 )
+
 par_bounds = {
     "parBETA": [1.0, 6.0],
     "parK1": [0.01, 0.5],
@@ -101,39 +108,49 @@ up_bounds = np.array([par_bounds[k][1] for k in par_names])
 range_vec = up_bounds - low_bounds
 min_vals = low_bounds[np.newaxis, :, np.newaxis]
 range_vals = range_vec[np.newaxis, :, np.newaxis]
-hope_timevar_params_denormalized1 = hope_timevar_params1 * range_vals + min_vals
-hope_timevar_params_denormalized1 = hope_timevar_params_denormalized1[
+
+# 反归一化三个模型的参数
+tcn_timevar_params_denormalized = tcn_timevar_params * range_vals + min_vals
+tcn_timevar_params_denormalized = tcn_timevar_params_denormalized[
     :, [0, 2, 1], :
 ]
-hope_timevar_params_denormalized2 = hope_timevar_params2 * range_vals + min_vals
-hope_timevar_params_denormalized2 = hope_timevar_params_denormalized2[
+transformer_timevar_params_denormalized = transformer_timevar_params * range_vals + min_vals
+transformer_timevar_params_denormalized = transformer_timevar_params_denormalized[
+    :, [0, 2, 1], :
+]
+tsmixer_timevar_params_denormalized = tsmixer_timevar_params * range_vals + min_vals
+tsmixer_timevar_params_denormalized = tsmixer_timevar_params_denormalized[
     :, [0, 2, 1], :
 ]
 
+# 创建3x3的子图
 fig, axes = plt.subplots(
-    nrows=3, ncols=2, figsize=(16, 10), constrained_layout=True
+    nrows=3, ncols=3, figsize=(20, 10), constrained_layout=True
 )
+
+# 绘制TCN模型参数（第一列）
 plot_parameters(
-    hope_timevar_params_denormalized1,
+    tcn_timevar_params_denormalized,
     titles=[r"$\beta$", r"$\gamma$", r"$K_0$"],
-    median_color="#D94F4FFF",
+    median_color="#5B84B1FF",
     fig=fig,
-    ts=time_range1,
+    ts=time_range,
     axes=axes[:, 0],
     label_fontsize=20,
     tick_fontsize=18,
     legend_fontsize=20,
     smooth_method="moving_average",
     window=1,
-    model_name=r'',
-    legend_pos='top-right'
+    model_name=r'$\delta MG_{\mathrm{TCN}}$',
 )
+
+# 绘制Transformer模型参数（第二列）
 plot_parameters(
-    hope_timevar_params_denormalized2,
+    transformer_timevar_params_denormalized,
     titles=[r"$\beta$", r"$\gamma$", r"$K_0$"],
     median_color="#D94F4FFF",
     fig=fig,
-    ts=time_range2,
+    ts=time_range,
     axes=axes[:, 1],
     label_fontsize=20,
     tick_fontsize=18,
@@ -141,9 +158,26 @@ plot_parameters(
     smooth_method="moving_average",
     show_ylabel=False,
     window=1,
-    model_name=r'',
-    legend_pos='top-left'
+    model_name=r'$\delta MG_{\mathrm{Transformer}}$',
 )
+
+# 绘制TSMixer模型参数（第三列）
+plot_parameters(
+    tsmixer_timevar_params_denormalized,
+    titles=[r"$\beta$", r"$\gamma$", r"$K_0$"],
+    median_color="#5BA85FFF",
+    fig=fig,
+    ts=time_range,
+    axes=axes[:, 2],
+    label_fontsize=20,
+    tick_fontsize=18,
+    legend_fontsize=20,
+    smooth_method="moving_average",
+    show_ylabel=False,
+    window=1,
+    model_name=r'$\delta MG_{\mathrm{TSMixer}}$',
+)
+
 for i, ax in enumerate(axes.flat):
     # 生成序号：(a), (b), (c)...
     label = f"({string.ascii_lowercase[i]})"
@@ -164,10 +198,11 @@ for i, ax in enumerate(axes.flat):
             boxstyle='round,pad=0.2' # 可选：圆角矩形，pad控制文字周围留白大小
         )
     )
+
 fig.savefig(
     os.path.join(
         os.getenv("PROJ_PATH"),
-        "project/better_estimate/visualize/figures/s5dv2_params_visual.png",
+        f"project/better_estimate/visualize/figures/{basin_id}_params_compare_others.png",
     ),
     dpi=300,
 )

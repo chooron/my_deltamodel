@@ -270,7 +270,7 @@ def plot_parameters(
             # bbox_to_anchor=(1, 1.02) 指轴坐标系的 (1, 1.02) 位置，即右上角上方一点点
             loc_params = dict(loc="lower right", bbox_to_anchor=(1, 1.02))
         else:
-            loc_params = dict(loc="best")
+            loc_params = dict(loc="lower left", bbox_to_anchor=(0.5, 1.02))
 
         # 绘制图例
         # borderaxespad=0 让图例紧贴着 bbox 定义的位置

@@ -85,7 +85,7 @@ class LstmMlpModel(torch.nn.Module):
         z1 = data_dict["xc_nn_norm"]
         z2 = data_dict["c_nn_norm"]
         lstm_out, _ = self.lstminv(z1)  # dim: timesteps, gages, params
-        fc_out = self.fc(lstm_out)
+        fc_out = self.fc(lstm_out) # timesteps, batch, out_size 0-1
         ann_out = self.ann(z2)
         return F.sigmoid(fc_out), F.sigmoid(ann_out)
 

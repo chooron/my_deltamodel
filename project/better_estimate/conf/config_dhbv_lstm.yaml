@@ -12,7 +12,7 @@
 defaults:
     - _self_
     - hydra: settings
-    - observations: camels_531 # camels_531, camels_671 
+    - observations: camels_671 # camels_531, camels_671 
 
 
 ## General -------------------------------#

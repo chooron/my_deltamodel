@@ -41,7 +41,7 @@ class LstmStaticModel(torch.nn.Module):
         hiddeninv2: int,
         dr1: float = 0.5,
         dr2: float = 0.5,
-        device: Optional[str] = "cpu",
+        device: str = "cpu",
     ) -> None:
         super().__init__()
         self.name = "LstmMlpModel"

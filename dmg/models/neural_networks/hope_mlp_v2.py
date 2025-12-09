@@ -5,7 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from dmg.models.neural_networks.layers.ann import AnnModel
-from dmg.models.neural_networks.layers.hope import Hope
+from dmg.models.neural_networks.layers.hope import HopeV2
+from dmg.models.neural_networks.layers.ema import SimpleMovingAverage
 
 
 class HopeMlpV2(torch.nn.Module):
@@ -26,28 +27,27 @@ class HopeMlpV2(torch.nn.Module):
         self.name = "HopeMlpModel"
         # cfg = {"lr_min": 0.001, "lr": 0.01, "lr_dt": 0.0, "min_dt": 0.001,
         #        "max_dt": 1, "wd": 0.0, "d_state": 64, "cfr": 1.0, "cfi": 1.0}
-        self.hope_layer = Hope(
+        self.hope_layer = HopeV2(
             input_size=nx1,
-            output_size=ny1,
+            output_size=None,
             hidden_size=hiddeninv1,
             dropout=dr1,
             n_layers=4,
-            prenorm=False,
-            cfg={
-                "lr_min": 0.001,
-                "lr": 0.01,
-                "lr_dt": 0.0,
-                "min_dt": 0.001,
-                "max_dt": 1,
-                "wd": 0.0,
-                "d_state": 64,
-                "cfr": 1.0,
-                "cfi": 1.0,
-                "use_gated": False,
-                "out_activation": "glu",
-            },
+            prenorm=True,
+            # cfg={
+            #     "lr_min": 0.001,
+            #     "lr": 0.01,
+            #     "lr_dt": 0.0,
+            #     "min_dt": 0.001,
+            #     "max_dt": 0.01,
+            #     "wd": 0.01,
+            #     "d_state": 64,
+            #     "cfr": 1.0,
+            #     "cfi": 1.0,
+            #     "out_activation": "glu",
+            # },
         )
-        self.a = 0.5
+        self.fc = nn.Linear(hiddeninv1, ny1)
         self.ann = AnnModel(
             nx=nx2,
             ny=ny2,
@@ -78,13 +78,15 @@ class HopeMlpV2(torch.nn.Module):
         hope_out = self.hope_layer(torch.permute(z1, (1, 0, 2))).permute(
             1, 0, 2
         )
+        fc_out = self.fc(hope_out)
         ann_out = self.ann(z2)
-        hope_out = (F.tanh(hope_out * self.a) + 1) / 2
+        fc_out = 0.5 * (F.softsign(fc_out) + 1)
         ann_out = F.sigmoid(ann_out)
-        return hope_out, ann_out
+        return fc_out, ann_out
 
     def predict_timevar_parameters(self, z1):
         hope_out = self.hope_layer(torch.permute(z1, (1, 0, 2))).permute(
             1, 0, 2
         )
-        return ((F.tanh(hope_out * self.a) + 1) / 2).reshape(-1, 3, 16)
+        fc_out = self.fc(hope_out)
+        return (0.5 * (F.softsign(fc_out) + 1)).reshape(-1, 3, 16)
