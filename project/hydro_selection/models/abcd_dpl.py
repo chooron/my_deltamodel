@@ -20,9 +20,9 @@ from dmg.models.hydrodl2 import change_param_range, uh_conv, uh_gamma
 
 # 导入核心计算函数
 try:
-    from .core import abcd_timestep_loop
+    from .jit_core import abcd_timestep_loop
 except ImportError:
-    from core import abcd_timestep_loop
+    from my_deltamodel.project.hydro_selection.models.jit_core import abcd_timestep_loop
 
 
 class Abcd(torch.nn.Module):

@@ -11,11 +11,10 @@ from typing import Any, Optional, Union
 import torch
 import torch.nn as nn
 from dmg.models.hydrodl2 import change_param_range, uh_conv, uh_gamma
+from project.triton_accelerate.models.hbv_triton_core import hbv_step_triton
 
-from project.hydro_selection.models.jit_core import hbv_timestep_loop
-
-
-class Hbv(torch.nn.Module):
+        
+class HbvJit(torch.nn.Module):
     """
     HBV 水文模型
 
@@ -30,25 +29,26 @@ class Hbv(torch.nn.Module):
     """
 
     # 物理参数边界
+    # 修复: 调整边界以避免数值不稳定（除以零、log(0)等问题）
     PARAM_BOUNDS = {
-        "parBETA": [1.0, 6.0],
-        "parFC": [50, 1000],
-        "parK0": [0.05, 0.9],
-        "parK1": [0.01, 0.5],
-        "parK2": [0.001, 0.2],
-        "parLP": [0.2, 1],
-        "parPERC": [0, 10],
-        "parUZL": [0, 100],
-        "parTT": [-2.5, 2.5],
-        "parCFMAX": [0.5, 10],
-        "parCFR": [0, 0.1],
-        "parCWH": [0, 0.2],
-        "parBETAET": [0.3, 5],
-        "parC": [0, 1],
-        "parRT": [0, 20],
-        "parAC": [0, 2500],
+        "parBETA": [1.0, 6.0],           # 土壤曲线形状参数
+        "parFC": [100, 1000],            # 田间持水量 (mm)，提高下限避免小分母
+        "parK0": [0.05, 0.9],            # 快速出流系数
+        "parK1": [0.01, 0.5],            # 中间出流系数
+        "parK2": [0.005, 0.2],           # 慢速出流系数，提高下限避免接近零
+        "parLP": [0.3, 1.0],             # 蒸发比例参数，提高下限避免 lp*fc 过小
+        "parPERC": [0.1, 10],            # 渗透参数 (mm/day)，提高下限避免零
+        "parUZL": [0.1, 100],            # 上层阈值 (mm)，提高下限避免零
+        "parTT": [-2.5, 2.5],            # 温度阈值 (°C)
+        "parCFMAX": [0.5, 10],           # 融雪系数 (mm/°C/day)
+        "parCFR": [0.01, 0.1],           # 再冻结系数，提高下限避免零
+        "parCWH": [0.01, 0.2],           # 持水容量系数，提高下限避免零
+        "parBETAET": [0.5, 5.0],         # 蒸发形状参数，收窄范围避免极端值
+        "parC": [0.001, 1],              # 毛管上升系数，提高下限避免零
+        "parRT": [0, 20],                # 路由时间参数
+        "parAC": [0, 2500],              # 面积系数
     }
-    ROUTING_BOUNDS = {"rout_a": [0, 2.9], "rout_b": [0, 6.5]}
+    ROUTING_BOUNDS = {"rout_a": [0.01, 2.9], "rout_b": [0.01, 6.5]}  # 提高下限避免零
 
     def __init__(
         self,
@@ -237,11 +237,11 @@ class Hbv(torch.nn.Module):
         dy_params: dict,
         static_params: dict,
     ) -> Union[tuple, dict[str, torch.Tensor]]:
-        """HBV 模型核心计算（使用 JIT 优化的时间步循环）"""
+        """HBV 模型核心计算（使用 Triton 加速的时间步循环）"""
         SNOWPACK, MELTWATER, SM, SUZ, SLZ = states
         n_steps, n_grid = forcing.shape[:2]
 
-        # 提取并扩展驱动数据
+        # 提取并扩展驱动数据 (T, B, E)
         P = (
             forcing[:, :, self.variables.index("prcp")]
             .unsqueeze(2)
@@ -258,93 +258,64 @@ class Hbv(torch.nn.Module):
             .repeat(1, 1, self.nmul)
         )
 
-        # 准备参数：对于动态参数保持 (T, B, E)，静态参数保持 (B, E)
         def get_param(name: str) -> torch.Tensor:
-            if name in dy_params:
-                return dy_params[name]  # (T, B, E)
-            else:
-                return static_params[name]  # (B, E)
+            p = dy_params[name] if name in dy_params else static_params[name]
+            return p
+            
+        # 获取参数
+        parTT = get_param("parTT")
+        parCFMAX = get_param("parCFMAX")
+        parCFR = get_param("parCFR")
+        parCWH = get_param("parCWH")
+        parFC = get_param("parFC")
+        parBETA = get_param("parBETA")
+        parLP = get_param("parLP")
+        parBETAET = get_param("parBETAET")
+        parC = get_param("parC")
+        parPERC = get_param("parPERC")
+        parK0 = get_param("parK0")
+        parK1 = get_param("parK1")
+        parK2 = get_param("parK2")
+        parUZL = get_param("parUZL")
 
-        # 调用 JIT 优化的时间步循环
-        (
-            Qsim_out,
-            Q0_out,
-            Q1_out,
-            Q2_out,
-            AET_out,
-            recharge_out,
-            excs_out,
-            evapfactor_out,
-            tosoil_out,
-            PERC_out,
-            SWE_out,
-            SM_out,
-            capillary_out,
-            soil_wetness_out,
-            SNOWPACK_final,
-            MELTWATER_final,
-            SM_final,
-            SUZ_final,
-            SLZ_final,
-        ) = hbv_timestep_loop(
-            P,
-            T,
-            PET,
-            SNOWPACK,
-            MELTWATER,
-            SM,
-            SUZ,
-            SLZ,
-            get_param("parTT"),
-            get_param("parCFMAX"),
-            get_param("parCFR"),
-            get_param("parCWH"),
-            get_param("parFC"),
-            get_param("parBETA"),
-            get_param("parLP"),
-            get_param("parBETAET"),
-            get_param("parC"),
-            get_param("parPERC"),
-            get_param("parK0"),
-            get_param("parK1"),
-            get_param("parK2"),
-            get_param("parUZL"),
-            self.nearzero,
-        )
+        # 存储输出
+        Qsim_list = []
+
+        # 使用 Triton 加速的时间步循环
+        for t in range(n_steps):
+            # 获取当前时刻的参数（支持动态参数）
+            tt_t = parTT[t] if parTT.dim() == 3 else parTT
+            cfmax_t = parCFMAX[t] if parCFMAX.dim() == 3 else parCFMAX
+            cfr_t = parCFR[t] if parCFR.dim() == 3 else parCFR
+            cwh_t = parCWH[t] if parCWH.dim() == 3 else parCWH
+            fc_t = parFC[t] if parFC.dim() == 3 else parFC
+            beta_t = parBETA[t] if parBETA.dim() == 3 else parBETA
+            lp_t = parLP[t] if parLP.dim() == 3 else parLP
+            betaet_t = parBETAET[t] if parBETAET.dim() == 3 else parBETAET
+            c_t = parC[t] if parC.dim() == 3 else parC
+            perc_t = parPERC[t] if parPERC.dim() == 3 else parPERC
+            k0_t = parK0[t] if parK0.dim() == 3 else parK0
+            k1_t = parK1[t] if parK1.dim() == 3 else parK1
+            k2_t = parK2[t] if parK2.dim() == 3 else parK2
+            uzl_t = parUZL[t] if parUZL.dim() == 3 else parUZL
+
+            # 调用 Triton 加速的单步计算
+            SNOWPACK, MELTWATER, SM, SUZ, SLZ, Q = hbv_step_triton(
+                P[t], T[t], PET[t],
+                SNOWPACK, MELTWATER, SM, SUZ, SLZ,
+                tt_t, cfmax_t, cfr_t, cwh_t, fc_t, beta_t, lp_t, betaet_t, c_t,
+                perc_t, k0_t, k1_t, k2_t, uzl_t,
+            )
+            Qsim_list.append(Q)
+
+        # 堆叠输出 (T, B, E)
+        Qsim_out = torch.stack(Qsim_list, dim=0)
 
         # 处理初始化模式
         if self.initialize:
-            return (
-                SNOWPACK_final,
-                MELTWATER_final,
-                SM_final,
-                SUZ_final,
-                SLZ_final,
-            )
+            return (SNOWPACK, MELTWATER, SM, SUZ, SLZ)
 
-        output = (
-            Qsim_out,
-            Q0_out,
-            Q1_out,
-            Q2_out,
-            AET_out,
-            recharge_out,
-            excs_out,
-            evapfactor_out,
-            tosoil_out,
-            PERC_out,
-            SWE_out,
-            SM_out,
-            capillary_out,
-            soil_wetness_out,
-            PET,
-        )
-
-        return self._finalize_output(
-            output,
-            n_steps,
-            n_grid,
-        )
+        return self._finalize_output(Qsim_out, n_steps, n_grid)
 
     def _apply_averaging(self, Qsimmu: torch.Tensor) -> torch.Tensor:
         """多模型平均
@@ -363,78 +334,35 @@ class Hbv(torch.nn.Module):
         return Qsimmu.mean(-1)
 
     def _apply_routing(
-        self, Qsim: torch.Tensor, Q_components: list, n_steps: int, n_grid: int
-    ) -> tuple:
-        """应用汇流演算"""
+        self, Qsim: torch.Tensor, n_steps: int, n_grid: int
+    ) -> torch.Tensor:
+        """简化的汇流演算（只处理总径流）"""
         UH = uh_gamma(
             self.routing_param_dict["rout_a"].repeat(n_steps, 1).unsqueeze(-1),
             self.routing_param_dict["rout_b"].repeat(n_steps, 1).unsqueeze(-1),
             lenF=15,
         ).permute([1, 2, 0])
 
-        def route(q):
-            rf = q.mean(-1, keepdim=True).permute([1, 2, 0])
-            return uh_conv(rf, UH).permute([2, 0, 1])
-
         rf = torch.unsqueeze(Qsim, -1).permute([1, 2, 0])
         Qsrout = uh_conv(rf, UH).permute([2, 0, 1])
-        Q0_rout, Q1_rout, Q2_rout = [route(q) for q in Q_components]
-        return Qsrout, Q0_rout, Q1_rout, Q2_rout
-
+        return Qsrout
+    
     def _finalize_output(
         self,
-        output,
-        n_steps,
-        n_grid,
+        Qsim_out: torch.Tensor,
+        n_steps: int,
+        n_grid: int,
     ) -> dict:
-        """整理最终输出"""
-        (
-            Qsim_out,
-            Q0_out,
-            Q1_out,
-            Q2_out,
-            AET_out,
-            recharge_out,
-            excs_out,
-            evapfactor_out,
-            tosoil_out,
-            PERC_out,
-            SWE_out,
-            SM_out,
-            capillary_out,
-            soil_wetness_out,
-            PET,
-        ) = output
+        """整理最终输出（简化版本，只返回径流）"""
+        # 多模型平均
         Qsimavg = self._apply_averaging(Qsim_out)
-        Qsim = Qsimavg
-        Qs, Q0_rout, Q1_rout, Q2_rout = self._apply_routing(
-            Qsim, [Q0_out, Q1_out, Q2_out], n_steps, n_grid
-        )
+        
+        # 汇流演算
+        Qs = self._apply_routing(Qsimavg, n_steps, n_grid)
 
-        # 构建输出字典
+        # 构建输出字典（简化版本）
         result = {
             "streamflow": Qs,
-            "srflow": Q0_rout,
-            "ssflow": Q1_rout,
-            "gwflow": Q2_rout,
-            "AET_hydro": AET_out.mean(-1, keepdim=True),
-            "AET_full": AET_out,
-            "SM_full": SM_out,
-            "soilwetness_full": soil_wetness_out,
-            "tosoil_full": tosoil_out,
-            "recharge_full": recharge_out,
-            "PET_hydro": PET.mean(-1, keepdim=True),
-            "SWE": SWE_out.mean(-1, keepdim=True),
-            "srflow_no_rout": Q0_out.mean(-1, keepdim=True),
-            "ssflow_no_rout": Q1_out.mean(-1, keepdim=True),
-            "gwflow_no_rout": Q2_out.mean(-1, keepdim=True),
-            "recharge": recharge_out.mean(-1, keepdim=True),
-            "excs": excs_out.mean(-1, keepdim=True),
-            "evapfactor": evapfactor_out.mean(-1, keepdim=True),
-            "tosoil": tosoil_out.mean(-1, keepdim=True),
-            "percolation": PERC_out.mean(-1, keepdim=True),
-            "soilwater": SM_out.mean(-1, keepdim=True),
-            "capillary": capillary_out.mean(-1, keepdim=True),
             "Qsimmu": Qsim_out,
         }
 
@@ -445,3 +373,4 @@ class Hbv(torch.nn.Module):
                     result[key] = result[key][self.pred_cutoff :]
 
         return result
+

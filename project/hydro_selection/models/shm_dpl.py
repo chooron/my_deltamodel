@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 from dmg.models.hydrodl2 import change_param_range, uh_conv, uh_gamma
 
-from .core import shm_timestep_loop
+from .jit_core import shm_timestep_loop
 
 
 class Shm(torch.nn.Module):

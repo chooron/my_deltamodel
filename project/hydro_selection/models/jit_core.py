@@ -701,10 +701,7 @@ def abcd_timestep_loop(
     c: torch.Tensor,
     d: torch.Tensor,
     nearzero: float,
-) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-]:
+):
     """
     ABCD 模型时间步循环（JIT 优化版本）
     

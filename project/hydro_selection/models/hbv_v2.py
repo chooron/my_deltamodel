@@ -12,8 +12,7 @@ from typing import Any, Optional, Union
 import torch
 import torch.nn as nn
 from dmg.models.hydrodl2 import change_param_range, uh_conv, uh_gamma
-
-from project.hydro_selection.models.core import hbv_timestep_loop
+from project.hydro_selection.models.jit_core import hbv_timestep_loop
 
 
 class HbvV2(torch.nn.Module):
