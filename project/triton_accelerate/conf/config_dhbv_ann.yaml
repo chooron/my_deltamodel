@@ -19,6 +19,7 @@ trained_model: project/triton_accelerate/output/model/
 
 
 ## Training ------------------------------#
+## 使用融合 Triton kernel + 学习率调度器
 train:
     start_time: 1980/10/01
     end_time: 1995/09/30
@@ -29,7 +30,8 @@ train:
     start_epoch: 0
     save_epoch: 5
     learning_rate: 1.0
-    lr_scheduler: None
+    # 启用学习率调度器
+    lr_scheduler: StepLR
     lr_scheduler_params:
         step_size: 10
         gamma: 0.5
@@ -61,7 +63,8 @@ delta_model:
     
     phy_model:
         directory: project\triton_accelerate\models
-        model: [HbvTriton]
+        model: [Hbv]
+        backend: fused  # 使用融合 Triton kernel
         nmul: 16
         warm_up: 365
         warm_up_states: False

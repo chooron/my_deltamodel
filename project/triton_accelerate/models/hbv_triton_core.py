@@ -92,7 +92,7 @@ def _snow_backward_kernel(
     g_tosoil = tl.load(g_tosoil_ptr + offs, mask=mask, other=0.0)
     g_rain = tl.load(g_rain_ptr + offs, mask=mask, other=0.0)
 
-    # Recompute forward
+    # ========== Recompute forward ==========
     temp_diff = t_val - tt
     is_rain = temp_diff > 0.0
     rain = tl.where(is_rain, p, 0.0)
@@ -113,36 +113,45 @@ def _snow_backward_kernel(
 
     arg_tosoil = melt_st2 - cwh * snow_st3
     mask_tosoil = arg_tosoil > 0.0
-    tosoil = tl.where(mask_tosoil, arg_tosoil, 0.0)
 
-    # Init grads
-    g_melt_st2 = g_melt_out
-    g_tosoil_tot = g_tosoil - g_melt_out
-    g_snow_st3 = g_snow_out
+    # ========== Backward pass ==========
+    # melt_out = melt_st2 - tosoil
+    # tosoil = max(melt_st2 - cwh * snow_st3, 0)
+    # 
+    # If arg_tosoil > 0: tosoil = melt_st2 - cwh * snow_st3
+    #   melt_out = melt_st2 - (melt_st2 - cwh * snow_st3) = cwh * snow_st3
+    #   d(melt_out)/d(melt_st2) = 0
+    #   d(melt_out)/d(snow_st3) = cwh
+    #   d(tosoil)/d(melt_st2) = 1
+    #   d(tosoil)/d(snow_st3) = -cwh
+    # If arg_tosoil <= 0: tosoil = 0
+    #   melt_out = melt_st2
+    #   d(melt_out)/d(melt_st2) = 1
+    #   d(tosoil)/d(melt_st2) = 0
+    
+    g_melt_st2 = tl.where(mask_tosoil, 0.0, g_melt_out) + tl.where(mask_tosoil, g_tosoil, 0.0)
+    g_snow_st3 = g_snow_out + tl.where(mask_tosoil, g_melt_out * cwh - g_tosoil * cwh, 0.0)
+    gcwh = tl.where(mask_tosoil, (g_melt_out - g_tosoil) * snow_st3, 0.0)
+    
     g_temp_diff = tl.zeros_like(temp_diff)
 
-    # tosoil
-    g_arg = tl.where(mask_tosoil, g_tosoil_tot, 0.0)
-    g_melt_st2 += g_arg
-    g_snow_st3 += g_arg * (-cwh)
-    gcwh = g_arg * (-snow_st3)
-
-    # melt_st2 = melt_st1 - refreeze
+    # melt_st2 = melt_st1 - refreeze_amt
+    # snow_st3 = snow_st2 + refreeze_amt
     g_melt_st1 = g_melt_st2
     g_refreeze = -g_melt_st2 + g_snow_st3
-
-    # snow_st3 = snow_st2 + refreeze
     g_snow_st2 = g_snow_st3
 
-    # refreeze = min(pot_refreeze, melt_st1)
+    # refreeze_amt = min(pot_refreeze, melt_st1)
     g_pot_ref = tl.where(mask_refreeze, g_refreeze, 0.0)
     g_melt_st1 += tl.where(mask_refreeze, 0.0, g_refreeze)
 
+    # pot_refreeze = cfr * cfmax * max(-temp_diff, 0)
     mask_cold = temp_diff < 0.0
     relu_neg = tl.maximum(-temp_diff, 0.0)
     gcfr = g_pot_ref * cfmax * relu_neg
     gcfmax_ref = g_pot_ref * cfr * relu_neg
-    g_temp_diff += g_pot_ref * cfr * cfmax * (-1.0) * mask_cold
+    # d(max(-temp_diff, 0))/d(temp_diff) = -1 when temp_diff < 0
+    g_temp_diff += tl.where(mask_cold, g_pot_ref * cfr * cfmax * (-1.0), 0.0)
 
     # melt_st1 = melt + melt_amount
     gmelt = g_melt_st1
@@ -156,16 +165,24 @@ def _snow_backward_kernel(
     g_pot_melt = tl.where(mask_melt, g_melt_amt, 0.0)
     g_snow_st1 += tl.where(mask_melt, 0.0, g_melt_amt)
 
+    # pot_melt = cfmax * max(temp_diff, 0)
     mask_warm = temp_diff > 0.0
     relu_pos = tl.maximum(temp_diff, 0.0)
     gcfmax = g_pot_melt * relu_pos + gcfmax_ref
-    g_temp_diff += g_pot_melt * cfmax * mask_warm
+    # d(max(temp_diff, 0))/d(temp_diff) = 1 when temp_diff > 0
+    g_temp_diff += tl.where(mask_warm, g_pot_melt * cfmax, 0.0)
 
+    # snow_st1 = snow + snow_input
     gsnow = g_snow_st1
-    g_snow_input_tot = g_snow_st1
+    g_snow_input = g_snow_st1
 
-    gp = tl.where(is_rain, g_rain, g_snow_input_tot)
+    # rain = p if is_rain else 0
+    # snow_input = 0 if is_rain else p
+    # When is_rain: gp = g_rain
+    # When !is_rain: gp = g_snow_input
+    gp = tl.where(is_rain, g_rain, g_snow_input)
 
+    # temp_diff = t_val - tt
     gt = g_temp_diff
     gtt = -g_temp_diff
 
@@ -203,6 +220,13 @@ class SnowBlockTriton(torch.autograd.Function):
     def backward(ctx, g_snow_out, g_melt_out, g_tosoil, g_rain):
         p, t_val, snow, melt, tt, cfmax, cfr, cwh = ctx.saved_tensors
         n = ctx.n
+        
+        # 确保输入梯度是连续的（PyTorch 可能传入 stride=0 的 expand 张量）
+        g_snow_out = g_snow_out.contiguous()
+        g_melt_out = g_melt_out.contiguous()
+        g_tosoil = g_tosoil.contiguous()
+        g_rain = g_rain.contiguous()
+        
         gp = torch.empty_like(p)
         gt = torch.empty_like(t_val)
         gsnow = torch.empty_like(snow)
@@ -220,6 +244,15 @@ class SnowBlockTriton(torch.autograd.Function):
             n,
             BLOCK_SIZE=256,
         )
+        
+        # 梯度裁剪和 nan 处理
+        # 使用更保守的梯度裁剪阈值以提高训练稳定性
+        grad_clip = 1e3  # 从 1e6 降低到 1e3
+        grads = [gp, gt, gsnow, gmelt, gtt, gcfmax, gcfr, gcwh]
+        for g in grads:
+            g.nan_to_num_(nan=0.0, posinf=grad_clip, neginf=-grad_clip)
+            g.clamp_(-grad_clip, grad_clip)
+        
         return gp, gt, gsnow, gmelt, gtt, gcfmax, gcfr, gcwh
 
 
@@ -254,7 +287,11 @@ def _soil_forward_kernel(
     c_par = tl.load(c_ptr + offs, mask=mask, other=0.0)
 
     # Triton does not support Python's ** on tensors; use tl.exp/tl.log for pow
-    soil_ratio = sm / fc
+    # 添加数值保护
+    fc_safe = tl.maximum(fc, eps)
+    lp_safe = tl.maximum(lp, eps)
+    
+    soil_ratio = sm / fc_safe
     soil_wet = tl.minimum(tl.maximum(tl.exp(beta * tl.log(tl.maximum(soil_ratio, eps))), 0.0), 1.0)
     recharge = (rain + tosoil) * soil_wet
 
@@ -262,14 +299,14 @@ def _soil_forward_kernel(
     excess = tl.maximum(sm_st1 - fc, 0.0)
     sm_st2 = sm_st1 - excess
 
-    evapfactor = sm_st2 / (lp * fc)
+    evapfactor = sm_st2 / (lp_safe * fc_safe)
     evapfactor = tl.minimum(tl.maximum(evapfactor, 0.0), 1.0)
     evapfactor = tl.minimum(tl.maximum(tl.exp(betaet * tl.log(tl.maximum(evapfactor, eps))), 0.0), 1.0)
 
     etact = tl.minimum(pet * evapfactor, sm_st2)
     sm_after_evap = tl.maximum(sm_st2 - etact, eps)
 
-    sm_ratio = sm_after_evap / fc
+    sm_ratio = sm_after_evap / fc_safe
     sm_ratio = tl.minimum(sm_ratio, 1.0)
     capillary = tl.minimum(slz, c_par * slz * (1.0 - sm_ratio))
     sm_out = tl.maximum(sm_after_evap + capillary, eps)
@@ -299,8 +336,8 @@ def _soil_backward_kernel(
     offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offs < n_elements
     eps = 1e-6
-    LEAK = 1e-4
 
+    # Load inputs
     sm = tl.load(sm_ptr + offs, mask=mask, other=0.0)
     slz = tl.load(slz_ptr + offs, mask=mask, other=0.0)
     rain = tl.load(rain_ptr + offs, mask=mask, other=0.0)
@@ -312,6 +349,7 @@ def _soil_backward_kernel(
     betaet = tl.load(betaet_ptr + offs, mask=mask, other=0.0)
     c_par = tl.load(c_ptr + offs, mask=mask, other=0.0)
 
+    # Load output gradients
     g_sm_out = tl.load(g_sm_out_ptr + offs, mask=mask, other=0.0)
     g_slz_out = tl.load(g_slz_out_ptr + offs, mask=mask, other=0.0)
     g_recharge = tl.load(g_recharge_ptr + offs, mask=mask, other=0.0)
@@ -320,89 +358,166 @@ def _soil_backward_kernel(
     g_evapfactor = tl.load(g_evapfactor_ptr + offs, mask=mask, other=0.0)
     g_capillary = tl.load(g_capillary_ptr + offs, mask=mask, other=0.0)
 
-    soil_ratio = sm / fc
-    soil_wet = tl.minimum(tl.maximum(tl.exp(beta * tl.log(tl.maximum(soil_ratio, eps))), 0.0), 1.0)
-    recharge = (rain + tosoil) * soil_wet
-    sm_st1 = sm + rain + tosoil - recharge
-    excess = tl.maximum(sm_st1 - fc, 0.0)
+    # ========== Recompute forward values ==========
+    # 添加数值保护
+    fc_safe_fwd = tl.maximum(fc, eps)
+    lp_safe_fwd = tl.maximum(lp, eps)
+    
+    # soil_wet = clamp((sm/fc)^beta, 0, 1)
+    soil_ratio = sm / fc_safe_fwd
+    soil_ratio_safe = tl.maximum(soil_ratio, eps)
+    soil_wet_raw = tl.exp(beta * tl.log(soil_ratio_safe))
+    soil_wet = tl.minimum(tl.maximum(soil_wet_raw, 0.0), 1.0)
+    mask_sw = (soil_wet_raw > 0.0) & (soil_wet_raw < 1.0)
+    
+    # recharge = (rain + tosoil) * soil_wet
+    recharge_val = (rain + tosoil) * soil_wet
+    
+    # sm_st1 = sm + rain + tosoil - recharge
+    sm_st1 = sm + rain + tosoil - recharge_val
+    
+    # excess = max(sm_st1 - fc, 0)
+    excess_val = tl.maximum(sm_st1 - fc, 0.0)
     mask_excess = sm_st1 > fc
-    sm_st2 = sm_st1 - excess
-
-    ef1 = sm_st2 / (lp * fc)
-    mask_ef1 = (ef1 > 0.0) & (ef1 < 1.0)
-    ef1 = tl.minimum(tl.maximum(ef1, 0.0), 1.0)
-    ef1_base = tl.maximum(ef1, eps)
-    ef2 = tl.exp(betaet * tl.log(ef1_base))
-    evapfactor = tl.minimum(tl.maximum(ef2, 0.0), 1.0)
-    mask_ef2 = (evapfactor > 0.0) & (evapfactor < 1.0)
-
-    pet_prod = pet * evapfactor
-    mask_et = pet_prod < sm_st2
-    etact = tl.where(mask_et, pet_prod, sm_st2)
-    sm_after_evap = sm_st2 - etact
-
-    sm_ratio = sm_after_evap / fc
-    sm_ratio = tl.minimum(sm_ratio, 1.0)
-    mask_smratio = sm_ratio < 1.0
+    
+    # sm_st2 = sm_st1 - excess
+    sm_st2 = sm_st1 - excess_val
+    
+    # ef1 = clamp(sm_st2 / (lp * fc), 0, 1)
+    denom_ef = lp_safe_fwd * fc_safe_fwd
+    ef1_raw = sm_st2 / denom_ef
+    mask_ef1 = (ef1_raw > 0.0) & (ef1_raw < 1.0)
+    ef1 = tl.minimum(tl.maximum(ef1_raw, 0.0), 1.0)
+    ef1_safe = tl.maximum(ef1, eps)
+    
+    # evapfactor = clamp(ef1^betaet, 0, 1)
+    ef2_raw = tl.exp(betaet * tl.log(ef1_safe))
+    evapfactor = tl.minimum(tl.maximum(ef2_raw, 0.0), 1.0)
+    mask_ef2 = (ef2_raw > 0.0) & (ef2_raw < 1.0)
+    
+    # etact = min(pet * evapfactor, sm_st2)
+    pet_evap = pet * evapfactor
+    mask_et = pet_evap < sm_st2
+    etact = tl.where(mask_et, pet_evap, sm_st2)
+    
+    # sm_after_evap = max(sm_st2 - etact, eps)
+    sm_after_evap_raw = sm_st2 - etact
+    sm_after_evap = tl.maximum(sm_after_evap_raw, eps)
+    mask_sm_after = sm_after_evap_raw > eps
+    
+    # sm_ratio = min(sm_after_evap / fc, 1.0)
+    sm_ratio_raw = sm_after_evap / fc_safe_fwd
+    sm_ratio = tl.minimum(sm_ratio_raw, 1.0)
+    mask_smratio = sm_ratio_raw < 1.0
+    
+    # cap_expr = c_par * slz * (1 - sm_ratio)
     cap_expr = c_par * slz * (1.0 - sm_ratio)
-    capillary = tl.minimum(slz, cap_expr)
-    sm_out = sm_after_evap + capillary
-    slz_out = slz - capillary
+    
+    # capillary = min(slz, cap_expr)
+    mask_cap = cap_expr < slz
+    capillary_val = tl.where(mask_cap, cap_expr, slz)
+    
+    # sm_out = max(sm_after_evap + capillary, eps)
+    sm_out_raw = sm_after_evap + capillary_val
+    mask_sm_out = sm_out_raw > eps
+    
+    # slz_out = max(slz - capillary, eps)
+    slz_out_raw = slz - capillary_val
+    mask_slz_out = slz_out_raw > eps
 
-    mask_slz_out = slz_out > eps
-    g_slz_out_mask = g_slz_out * mask_slz_out
-
-    g_cap_total = g_capillary + g_sm_out - g_slz_out_mask
-    g_sm_after_evap = g_sm_out
-    g_slz = g_slz_out_mask
-
-    mask_cap_expr = cap_expr < slz
-    g_cap_expr = tl.where(mask_cap_expr, g_cap_total, 0.0)
-    g_slz += tl.where(mask_cap_expr, 0.0, g_cap_total)
-    g_slz += g_cap_expr * c_par * (1.0 - sm_ratio)
+    # ========== Backward pass ==========
+    # Initialize gradients
+    g_fc = tl.zeros_like(fc)
+    
+    # sm_out = max(sm_after_evap + capillary, eps)
+    # slz_out = max(slz - capillary, eps)
+    g_sm_out_eff = tl.where(mask_sm_out, g_sm_out, 0.0)
+    g_slz_out_eff = tl.where(mask_slz_out, g_slz_out, 0.0)
+    
+    # From sm_out: g_sm_after_evap += g_sm_out, g_capillary_val += g_sm_out
+    # From slz_out: g_slz += g_slz_out, g_capillary_val -= g_slz_out
+    g_sm_after_evap = g_sm_out_eff
+    g_capillary_val = g_capillary + g_sm_out_eff - g_slz_out_eff
+    g_slz = g_slz_out_eff
+    
+    # capillary = min(slz, cap_expr)
+    # If cap_expr < slz: capillary = cap_expr
+    # Else: capillary = slz
+    g_cap_expr = tl.where(mask_cap, g_capillary_val, 0.0)
+    g_slz += tl.where(mask_cap, 0.0, g_capillary_val)
+    
+    # cap_expr = c_par * slz * (1 - sm_ratio)
     g_c_par = g_cap_expr * slz * (1.0 - sm_ratio)
-    g_sm_after_evap += g_cap_expr * (-c_par * slz * (1.0 / fc)) * mask_smratio
-    g_fc_cap = g_cap_expr * (c_par * slz * (sm_after_evap / (fc * fc))) * mask_smratio
-
-    mask_sm3 = sm_out > eps
-    g_sm_st2 = tl.where(mask_sm3, g_sm_after_evap, 0.0)
-    g_etact = tl.where(mask_sm3, -g_sm_after_evap, 0.0)
-
-    g_pet_prod = tl.where(mask_et, g_etact, g_etact * LEAK)
+    g_slz += g_cap_expr * c_par * (1.0 - sm_ratio)
+    g_sm_ratio = g_cap_expr * (-c_par * slz)
+    
+    # sm_ratio = min(sm_after_evap / fc, 1.0)
+    # If sm_ratio_raw < 1: sm_ratio = sm_after_evap / fc
+    g_sm_after_evap += tl.where(mask_smratio, g_sm_ratio / fc_safe_fwd, 0.0)
+    g_fc += tl.where(mask_smratio, g_sm_ratio * (-sm_after_evap / (fc_safe_fwd * fc_safe_fwd)), 0.0)
+    
+    # sm_after_evap = max(sm_st2 - etact, eps)
+    g_sm_st2 = tl.where(mask_sm_after, g_sm_after_evap, 0.0)
+    g_etact = tl.where(mask_sm_after, -g_sm_after_evap, 0.0)
+    
+    # etact = min(pet * evapfactor, sm_st2)
+    g_pet_evap = tl.where(mask_et, g_etact, 0.0)
     g_sm_st2 += tl.where(mask_et, 0.0, g_etact)
-    g_evapfactor_tot = g_evapfactor + g_pet_prod * pet
-    g_pet = g_pet_prod * evapfactor
-
+    
+    # pet_evap = pet * evapfactor
+    g_evapfactor_tot = g_evapfactor + g_pet_evap * pet
+    g_pet = g_pet_evap * evapfactor
+    
+    # evapfactor = clamp(ef2_raw, 0, 1) where ef2_raw = ef1^betaet
     g_ef2 = tl.where(mask_ef2, g_evapfactor_tot, 0.0)
-    log_ef1 = tl.log(ef1_base)
-    g_betaet = g_ef2 * ef2 * log_ef1
-    g_ef1 = g_ef2 * betaet * tl.exp((betaet - 1.0) * log_ef1) * mask_ef1
-
-    denom = lp * fc
-    g_sm_st2 += g_ef1 * (1.0 / denom)
-    g_lp = g_ef1 * (-sm_st2 / (denom * lp))
-    g_fc = g_ef1 * (-sm_st2 / (denom * fc)) + g_fc_cap
-
-    g_excess_tot = g_excess - g_sm_st2
-    g_sm_st1 = g_sm_st2 + tl.where(mask_excess, g_excess_tot, g_excess_tot * LEAK)
-    g_fc += tl.where(mask_excess, -g_excess_tot, -g_excess_tot * LEAK)
-
-    g_recharge_tot = g_recharge + (-g_sm_st1)
+    log_ef1 = tl.log(ef1_safe)
+    # Clamp log_ef1 to prevent extreme values
+    log_ef1_clamped = tl.minimum(tl.maximum(log_ef1, -20.0), 20.0)
+    g_betaet = g_ef2 * ef2_raw * log_ef1_clamped
+    # d(ef1^betaet)/d(ef1) = betaet * ef1^(betaet-1)
+    exp_arg_ef = (betaet - 1.0) * log_ef1_clamped
+    exp_arg_ef_clamped = tl.minimum(tl.maximum(exp_arg_ef, -20.0), 20.0)
+    g_ef1 = g_ef2 * betaet * tl.exp(exp_arg_ef_clamped)
+    
+    # ef1 = clamp(ef1_raw, 0, 1) where ef1_raw = sm_st2 / (lp * fc)
+    g_ef1_raw = tl.where(mask_ef1, g_ef1, 0.0)
+    denom_ef_safe = tl.maximum(denom_ef, eps)
+    g_sm_st2 += g_ef1_raw / denom_ef_safe
+    g_lp = g_ef1_raw * (-sm_st2 / (denom_ef_safe * lp_safe_fwd))
+    g_fc += g_ef1_raw * (-sm_st2 / (denom_ef_safe * fc_safe_fwd))
+    
+    # sm_st2 = sm_st1 - excess
+    # excess = max(sm_st1 - fc, 0)
+    # If sm_st1 > fc: excess = sm_st1 - fc, sm_st2 = fc
+    # Else: excess = 0, sm_st2 = sm_st1
+    g_excess_tot = g_excess
+    g_sm_st1 = g_sm_st2
+    # When mask_excess: sm_st2 = sm_st1 - (sm_st1 - fc) = fc, so d(sm_st2)/d(sm_st1) = 0
+    # But excess = sm_st1 - fc, so d(excess)/d(sm_st1) = 1
+    g_sm_st1 += tl.where(mask_excess, g_excess_tot, 0.0)
+    g_fc += tl.where(mask_excess, -g_excess_tot, 0.0)
+    
+    # sm_st1 = sm + rain + tosoil - recharge
+    # recharge = (rain + tosoil) * soil_wet
+    g_recharge_tot = g_recharge - g_sm_st1
     g_soil_wet_tot = g_soil_wet + g_recharge_tot * (rain + tosoil)
     g_rain = g_sm_st1 + g_recharge_tot * soil_wet
     g_tosoil = g_sm_st1 + g_recharge_tot * soil_wet
-
-    sw_base = sm / fc
-    safe_sw = tl.maximum(sw_base, eps)
-    sw_pow = tl.exp(beta * tl.log(safe_sw))
-    mask_sw = (sw_pow > 0.0) & (sw_pow < 1.0)
-    g_sw_pow = tl.where(mask_sw, g_soil_wet_tot, g_soil_wet_tot * LEAK)
-
-    g_beta = g_sw_pow * sw_pow * tl.log(safe_sw)
-    pow_sw = tl.exp((beta - 1.0) * tl.log(safe_sw))
-    g_sm = g_sw_pow * beta * pow_sw * (1.0 / fc)
-    g_fc += g_sw_pow * beta * pow_sw * (-sm / (fc * fc))
-    g_sm += g_sm_st1
+    g_sm = g_sm_st1
+    
+    # soil_wet = clamp((sm/fc)^beta, 0, 1)
+    g_sw_raw = tl.where(mask_sw, g_soil_wet_tot, 0.0)
+    log_sr = tl.log(soil_ratio_safe)
+    # Clamp log_sr to prevent extreme values
+    log_sr_clamped = tl.minimum(tl.maximum(log_sr, -20.0), 20.0)
+    g_beta = g_sw_raw * soil_wet_raw * log_sr_clamped
+    # d((sm/fc)^beta)/d(sm) = beta * (sm/fc)^(beta-1) * (1/fc)
+    # Use clamped exponent to prevent overflow
+    exp_arg = (beta - 1.0) * log_sr_clamped
+    exp_arg_clamped = tl.minimum(tl.maximum(exp_arg, -20.0), 20.0)
+    pow_term = tl.exp(exp_arg_clamped)
+    g_sm += g_sw_raw * beta * pow_term / fc_safe_fwd
+    g_fc += g_sw_raw * beta * pow_term * (-sm / (fc_safe_fwd * fc_safe_fwd))
 
     tl.store(g_sm_ptr + offs, g_sm, mask=mask)
     tl.store(g_slz_ptr + offs, g_slz, mask=mask)
@@ -443,6 +558,16 @@ class SoilBlockTriton(torch.autograd.Function):
     def backward(ctx, g_sm_out, g_slz_out, g_recharge, g_excess, g_soil_wet, g_evapfactor, g_capillary):
         sm, slz, rain, tosoil, pet, fc, beta, lp, betaet, c_par = ctx.saved_tensors
         n = ctx.n
+        
+        # 确保输入梯度是连续的（PyTorch 可能传入 stride=0 的 expand 张量）
+        g_sm_out = g_sm_out.contiguous()
+        g_slz_out = g_slz_out.contiguous()
+        g_recharge = g_recharge.contiguous()
+        g_excess = g_excess.contiguous()
+        g_soil_wet = g_soil_wet.contiguous()
+        g_evapfactor = g_evapfactor.contiguous()
+        g_capillary = g_capillary.contiguous()
+        
         g_sm = torch.empty_like(sm)
         g_slz = torch.empty_like(slz)
         g_rain = torch.empty_like(rain)
@@ -462,6 +587,15 @@ class SoilBlockTriton(torch.autograd.Function):
             n,
             BLOCK_SIZE=256,
         )
+        
+        # 梯度裁剪和 nan 处理
+        # 使用更保守的梯度裁剪阈值以提高训练稳定性
+        grad_clip = 1e3  # 从 1e6 降低到 1e3
+        grads = [g_sm, g_slz, g_rain, g_tosoil, g_pet, g_fc, g_beta, g_lp, g_betaet, g_c]
+        for g in grads:
+            g.nan_to_num_(nan=0.0, posinf=grad_clip, neginf=-grad_clip)
+            g.clamp_(-grad_clip, grad_clip)
+        
         return g_sm, g_slz, g_rain, g_tosoil, g_pet, g_fc, g_beta, g_lp, g_betaet, g_c
 
 
@@ -560,38 +694,66 @@ def _routing_backward_kernel(
     q2 = k2 * slz_st1
     slz_out = slz_st1 - q2
 
+    # q_total = q0 + q1 + q2
     g_q0 = g_q_total
     g_q1 = g_q_total
     g_q2 = g_q_total
 
-    g_suz_st3 = g_suz_out
-    g_q1 = g_q1 - g_suz_out
-
-    g_k1 = g_q1 * suz_st3
-    g_suz_st3 += g_q1 * k1
-
-    g_suz_st2 = g_suz_st3
-    g_q0 = g_q0 - g_suz_st3
-
-    g_k0 = g_q0 * tl.maximum(q0_arg, 0.0)
-    g_suz_st2 += g_q0 * k0 * mask_q0
-    g_uzl = -g_q0 * k0 * mask_q0
-
+    # slz_out = slz_st1 - q2
     g_slz_st1 = g_slz_out
-    g_q2 = g_q2 - g_slz_out
+    g_q2 += -g_slz_out
 
+    # q2 = k2 * slz_st1
     g_k2 = g_q2 * slz_st1
     g_slz_st1 += g_q2 * k2
 
-    g_suz_st2_eff = tl.where(mask_perc, 0.0, g_suz_st2)
-    g_perc_flux = g_slz_st1 - g_suz_st2_eff
-    g_suz_st1 = tl.where(mask_perc, g_perc_flux, g_suz_st2_eff)
-    g_perc = tl.where(mask_perc, 0.0, g_perc_flux)
+    # suz_out = suz_st3 - q1
+    g_suz_st3 = g_suz_out
+    g_q1 += -g_suz_out
 
+    # q1 = k1 * suz_st3
+    g_k1 = g_q1 * suz_st3
+    g_suz_st3 += g_q1 * k1
+
+    # suz_st3 = suz_st2 - q0
+    g_suz_st2 = g_suz_st3
+    g_q0 += -g_suz_st3
+
+    # q0 = k0 * max(suz_st2 - uzl, 0)
+    g_k0 = g_q0 * tl.maximum(q0_arg, 0.0)
+    g_suz_st2 += tl.where(mask_q0, g_q0 * k0, 0.0)
+    g_uzl = tl.where(mask_q0, -g_q0 * k0, 0.0)
+
+    # perc_flux = min(suz_st1, perc)
+    # suz_st2 = suz_st1 - perc_flux
+    # slz_st1 = slz + perc_flux
+    # 
+    # Case 1: suz_st1 < perc (mask_perc=True): perc_flux = suz_st1
+    #   suz_st2 = suz_st1 - suz_st1 = 0 (constant, no gradient to suz_st1 from suz_st2)
+    #   slz_st1 = slz + suz_st1, so d(slz_st1)/d(suz_st1) = 1
+    #   g_suz_st1 = g_slz_st1 (from slz_st1 path only)
+    #   g_perc = 0
+    #
+    # Case 2: suz_st1 >= perc (mask_perc=False): perc_flux = perc
+    #   suz_st2 = suz_st1 - perc, so d(suz_st2)/d(suz_st1) = 1
+    #   slz_st1 = slz + perc, so d(slz_st1)/d(suz_st1) = 0
+    #   g_suz_st1 = g_suz_st2 (from suz_st2 path only)
+    #   g_perc = g_slz_st1 - g_suz_st2 (perc contributes to both slz_st1 and suz_st2)
+    
+    g_suz_st1 = tl.where(mask_perc, g_slz_st1, g_suz_st2)
+    g_perc = tl.where(mask_perc, 0.0, g_slz_st1 - g_suz_st2)
+
+    # suz_st1 = suz + recharge + excess
     g_suz = g_suz_st1
     g_recharge = g_suz_st1
     g_excess = g_suz_st1
+    
+    # slz_st1 = slz + perc_flux
+    # g_slz already has contribution from g_slz_st1 (direct path)
+    # Note: perc_flux contribution is handled above
     g_slz = g_slz_st1
+    
+    # sm_out = sm_after (pass-through)
     g_sm = g_sm_after
 
     tl.store(g_sm_ptr + offs, g_sm, mask=mask)
@@ -630,6 +792,13 @@ class RoutingBlockTriton(torch.autograd.Function):
     def backward(ctx, g_sm_out, g_suz_out, g_slz_out, g_q_out):
         sm_after_evap, suz, slz, recharge, excess, perc, k0, k1, k2, uzl = ctx.saved_tensors
         n = ctx.n
+        
+        # 确保输入梯度是连续的（PyTorch 可能传入 stride=0 的 expand 张量）
+        g_sm_out = g_sm_out.contiguous()
+        g_suz_out = g_suz_out.contiguous()
+        g_slz_out = g_slz_out.contiguous()
+        g_q_out = g_q_out.contiguous()
+        
         g_sm = torch.empty_like(sm_after_evap)
         g_suz = torch.empty_like(suz)
         g_slz = torch.empty_like(slz)
@@ -651,6 +820,15 @@ class RoutingBlockTriton(torch.autograd.Function):
             n,
             BLOCK_SIZE=256,
         )
+        
+        # 梯度裁剪和 nan 处理
+        # 使用更保守的梯度裁剪阈值以提高训练稳定性
+        grad_clip = 1e3  # 从 1e6 降低到 1e3
+        grads = [g_sm, g_suz, g_slz, g_recharge, g_excess, g_perc, g_k0, g_k1, g_k2, g_uzl]
+        for g in grads:
+            g.nan_to_num_(nan=0.0, posinf=grad_clip, neginf=-grad_clip)
+            g.clamp_(-grad_clip, grad_clip)
+        
         return g_sm, g_suz, g_slz, g_recharge, g_excess, g_perc, g_k0, g_k1, g_k2, g_uzl
 
 
@@ -672,6 +850,19 @@ def hbv_step_triton(
     sm_after, suz_out, slz_out, q_out = RoutingBlockTriton.apply(
         sm_out, suz, slz_after_cap, recharge, excess, perc, k0, k1, k2, uzl
     )
+    
+    # 添加状态变量的物理约束，防止训练过程中状态变量变得不合理
+    # 使用 detach + clamp + 重新附加梯度的方式，避免影响梯度计算
+    eps = 1e-5
+    
+    # 使用 clamp 确保状态变量在物理合理范围内
+    # 注意：这里使用 clamp 而不是 detach，以保持梯度流
+    snow_out = torch.clamp(snow_out, min=eps, max=1000.0)
+    melt_out = torch.clamp(melt_out, min=eps, max=500.0)
+    sm_after = torch.clamp(sm_after, min=eps, max=1000.0)
+    suz_out = torch.clamp(suz_out, min=eps, max=500.0)
+    slz_out = torch.clamp(slz_out, min=eps, max=1000.0)
+    
     return snow_out, melt_out, sm_after, suz_out, slz_out, q_out
 
 

@@ -85,17 +85,32 @@ class PathBuilder(BaseModel):
 
     def build_path_model(self) -> str:
         """Build path to model object from individual root paths."""
-        path_model = os.path.join(
-            self.base_path,
-            self.dataset_name,
-            self.train_period,
-            self.multimodel_state,
-            self.hyperparameter_detail,
-            self.model_names,
-            self.loss_function,
-            self.dynamic_state,
-            # self.dynamic_parameters,
-        )
+        if "backend" in self.config["delta_model"]["phy_model"]:
+            backend = self.config["delta_model"]["phy_model"]["backend"]
+            path_model = os.path.join(
+                self.base_path,
+                self.dataset_name,
+                self.train_period,
+                self.multimodel_state,
+                self.hyperparameter_detail,
+                self.model_names,
+                backend,
+                self.loss_function,
+                self.dynamic_state,
+                # self.dynamic_parameters,
+            )
+        else:
+            path_model = os.path.join(
+                self.base_path,
+                self.dataset_name,
+                self.train_period,
+                self.multimodel_state,
+                self.hyperparameter_detail,
+                self.model_names,
+                self.loss_function,
+                self.dynamic_state,
+                # self.dynamic_parameters,
+            )
         if "test_group_id" in self.config["test"].keys():
             path_model = os.path.join(
                 path_model, f"pub_basin_{self.config['test']['test_group_id']}"
@@ -399,6 +414,7 @@ class PathBuilder(BaseModel):
         warmup = "noWU"
         if config["delta_model"]["phy_model"]["warm_up_states"]:
             warmup = "WU"
+        
 
         return (
             f"{config['delta_model']['nn_model']['model']}_"

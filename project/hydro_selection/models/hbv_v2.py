@@ -12,7 +12,7 @@ from typing import Any, Optional, Union
 import torch
 import torch.nn as nn
 from dmg.models.hydrodl2 import change_param_range, uh_conv, uh_gamma
-from project.hydro_selection.models.jit_core import hbv_timestep_loop
+from project.hydro_selection.models.layers.jit_core import hbv_timestep_loop
 
 
 class HbvV2(torch.nn.Module):
@@ -294,22 +294,22 @@ class HbvV2(torch.nn.Module):
             SUZ_final, SLZ_final
         ) = hbv_timestep_loop(
             P, T, PET,
-            SNOWPACK, MELTWATER, SM, SUZ, SLZ,
-            get_param("parTT"),
-            get_param("parCFMAX"),
-            get_param("parCFR"),
-            get_param("parCWH"),
-            get_param("parFC"),
-            get_param("parBETA"),
-            get_param("parLP"),
-            get_param("parBETAET"),
-            get_param("parC"),
-            get_param("parPERC"),
-            get_param("parK0"),
-            get_param("parK1"),
-            get_param("parK2"),
-            get_param("parUZL"),
-            self.nearzero,
+            SNOWPACK=SNOWPACK, MELTWATER=MELTWATER, SM=SM, SUZ=SUZ, SLZ=SLZ,
+            parTT=get_param("parTT"),
+            parCFMAX=get_param("parCFMAX"),
+            parCFR=get_param("parCFR"),
+            parCWH=get_param("parCWH"),
+            parFC=get_param("parFC"),
+            parBETA=get_param("parBETA"),
+            parLP=get_param("parLP"),
+            parBETAET=get_param("parBETAET"),
+            parC=get_param("parC"),
+            parPERC=get_param("parPERC"),
+            parK0=get_param("parK0"),
+            parK1=get_param("parK1"),
+            parK2=get_param("parK2"),
+            parUZL=get_param("parUZL"),
+            nearzero=self.nearzero,
         )
 
         # 处理初始化模式

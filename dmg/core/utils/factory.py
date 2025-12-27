@@ -234,6 +234,7 @@ def load_nn_model(
     config["nn_model"]["ny"] = phy_model.learnable_param_count
     config["nn_model"]["ny1"] = getattr(phy_model, "learnable_param_count1", ny)
     config["nn_model"]["ny2"] = getattr(phy_model, "learnable_param_count2", ny)
+    config["nn_model"]["nmul"] = config["phy_model"].get("nmul", 16)
 
     if "directory" in config["nn_model"].keys():
         tmp_nn_model_dir = os.path.join(
@@ -241,7 +242,6 @@ def load_nn_model(
         )
     else:
         tmp_nn_model_dir = nn_model_dir
-    print(tmp_nn_model_dir)
 
     # Dynamically retrieve the model
     cls = load_component(

@@ -3,6 +3,10 @@ HBV 水文模型
 
 基于 HBV 概念式水文模型的实现。
 
+支持两种后端:
+- triton: 使用 Triton 加速的前向和手写 backward (可能有梯度问题)
+- autograd: 使用纯 PyTorch + torch.compile，自动微分保证梯度正确
+
 Author: chooron
 """
 
@@ -11,7 +15,26 @@ from typing import Any, Optional, Union
 import torch
 import torch.nn as nn
 from dmg.models.hydrodl2 import change_param_range, uh_conv, uh_gamma
-from project.triton_accelerate.models.hbv_triton_core import hbv_step_triton
+
+# 尝试导入 Triton 版本，如果失败则只能用 autograd
+try:
+    from project.triton_accelerate.models.hbv_triton_core import hbv_step_triton
+    TRITON_AVAILABLE = True
+except ImportError:
+    TRITON_AVAILABLE = False
+
+# 尝试导入融合 Triton 版本
+try:
+    from project.triton_accelerate.models.hbv_triton_fused import hbv_step_fused
+    FUSED_AVAILABLE = True
+except ImportError:
+    FUSED_AVAILABLE = False
+
+# 导入 autograd 版本
+from project.triton_accelerate.models.hbv_triton_autograd import (
+    hbv_step_pytorch,
+    hbv_step_compiled,
+)
 
 
 class HbvTriton(torch.nn.Module):
@@ -54,6 +77,7 @@ class HbvTriton(torch.nn.Module):
         self,
         config: Optional[dict[str, Any]] = None,
         device: Optional[torch.device] = None,
+        backend: str = "triton",  # "triton" 或 "autograd"
     ) -> None:
         super().__init__()
 
@@ -68,6 +92,21 @@ class HbvTriton(torch.nn.Module):
         self.variables = ["prcp", "tmean", "pet"]
         self.nearzero = 1e-5
         self.nmul = 1
+        
+        # 后端选择 - 优先从配置中读取
+        # 支持: "triton", "fused", "autograd"
+        if config is not None and "backend" in config:
+            self.backend = config["backend"]
+        else:
+            self.backend = backend
+        
+        # 检查后端可用性
+        if self.backend == "triton" and not TRITON_AVAILABLE:
+            print("Warning: Triton not available, falling back to autograd backend")
+            self.backend = "autograd"
+        elif self.backend == "fused" and not FUSED_AVAILABLE:
+            print("Warning: Fused Triton not available, falling back to autograd backend")
+            self.backend = "autograd"
 
         # 参数边界
         self.parameter_bounds = self.PARAM_BOUNDS
@@ -237,7 +276,7 @@ class HbvTriton(torch.nn.Module):
         dy_params: dict,
         static_params: dict,
     ) -> Union[tuple, dict[str, torch.Tensor]]:
-        """HBV 模型核心计算（使用 Triton 加速的时间步循环）"""
+        """HBV 模型核心计算（支持 Triton 或 autograd 后端）"""
         SNOWPACK, MELTWATER, SM, SUZ, SLZ = states
         n_steps, n_grid = forcing.shape[:2]
 
@@ -280,8 +319,17 @@ class HbvTriton(torch.nn.Module):
 
         # 存储输出
         Qsim_list = []
+        
+        # 选择计算后端
+        if self.backend == "triton":
+            step_fn = self._step_triton
+        elif self.backend == "fused":
+            step_fn = self._step_fused
+        else:
+            # autograd 后端使用 torch.compile 加速
+            step_fn = self._step_autograd
 
-        # 使用 Triton 加速的时间步循环
+        # 时间步循环
         for t in range(n_steps):
             # 获取当前时刻的参数（支持动态参数）
             tt_t = parTT[t] if parTT.dim() == 3 else parTT
@@ -299,30 +347,13 @@ class HbvTriton(torch.nn.Module):
             k2_t = parK2[t] if parK2.dim() == 3 else parK2
             uzl_t = parUZL[t] if parUZL.dim() == 3 else parUZL
 
-            # 调用 Triton 加速的单步计算
-            SNOWPACK, MELTWATER, SM, SUZ, SLZ, Q = hbv_step_triton(
-                P[t],
-                T[t],
-                PET[t],
-                SNOWPACK,
-                MELTWATER,
-                SM,
-                SUZ,
-                SLZ,
-                tt_t,
-                cfmax_t,
-                cfr_t,
-                cwh_t,
-                fc_t,
-                beta_t,
-                lp_t,
-                betaet_t,
-                c_t,
-                perc_t,
-                k0_t,
-                k1_t,
-                k2_t,
-                uzl_t,
+            # 调用单步计算
+            SNOWPACK, MELTWATER, SM, SUZ, SLZ, Q = step_fn(
+                P[t], T[t], PET[t],
+                SNOWPACK, MELTWATER, SM, SUZ, SLZ,
+                tt_t, cfmax_t, cfr_t, cwh_t,
+                fc_t, beta_t, lp_t, betaet_t, c_t,
+                perc_t, k0_t, k1_t, k2_t, uzl_t,
             )
             Qsim_list.append(Q)
 
@@ -334,6 +365,37 @@ class HbvTriton(torch.nn.Module):
             return (SNOWPACK, MELTWATER, SM, SUZ, SLZ)
 
         return self._finalize_output(Qsim_out, n_steps, n_grid)
+
+    def _step_triton(self, p, t_val, pet, snow, melt, sm, suz, slz,
+                     tt, cfmax, cfr, cwh, fc, beta, lp, betaet, c_par,
+                     perc, k0, k1, k2, uzl):
+        """Triton 后端单步计算（分离的 Snow/Soil/Routing kernels）"""
+        return hbv_step_triton(
+            p, t_val, pet, snow, melt, sm, suz, slz,
+            tt, cfmax, cfr, cwh, fc, beta, lp, betaet, c_par,
+            perc, k0, k1, k2, uzl,
+        )
+
+    def _step_fused(self, p, t_val, pet, snow, melt, sm, suz, slz,
+                    tt, cfmax, cfr, cwh, fc, beta, lp, betaet, c_par,
+                    perc, k0, k1, k2, uzl):
+        """融合 Triton 后端单步计算（整体 forward/backward kernel）"""
+        return hbv_step_fused(
+            p, t_val, pet, snow, melt, sm, suz, slz,
+            tt, cfmax, cfr, cwh, fc, beta, lp, betaet, c_par,
+            perc, k0, k1, k2, uzl,
+        )
+
+    def _step_autograd(self, p, t_val, pet, snow, melt, sm, suz, slz,
+                       tt, cfmax, cfr, cwh, fc, beta, lp, betaet, c_par,
+                       perc, k0, k1, k2, uzl):
+        """Autograd 后端单步计算 (使用 torch.compile 加速)"""
+        return hbv_step_compiled(
+            p, t_val, pet, snow, melt, sm, suz, slz,
+            tt, cfmax, cfr, cwh, fc, beta, lp, betaet, c_par,
+            perc, k0, k1, k2, uzl,
+            nearzero=self.nearzero,
+        )
 
     def _apply_averaging(self, Qsimmu: torch.Tensor) -> torch.Tensor:
         """多模型平均

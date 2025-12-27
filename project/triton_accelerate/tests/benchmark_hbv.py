@@ -34,7 +34,7 @@ load_dotenv()
 sys.path.append(os.getenv("PROJ_PATH", "."))
 
 # 导入 Triton 实现
-from project.triton_accelerate.models.hbv_triton_autograd import hbv_step_triton, hbv_run_triton
+from project.triton_accelerate.models.hbv_manual_core import hbv_step_triton, hbv_run_triton
 
 
 # ==========================================

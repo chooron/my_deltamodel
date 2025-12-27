@@ -208,3 +208,8 @@ cache
 *.npz
 
 runs
+
+project
+
+!project/better_estimate
+!project/triton_accelerate
