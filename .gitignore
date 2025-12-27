@@ -209,7 +209,7 @@ cache
 
 runs
 
-project
+# project
 
-!project/better_estimate
-!project/triton_accelerate
+project/multiscale_moe
+project/diff_compare
