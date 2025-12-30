@@ -15,8 +15,8 @@ from dmg.core.utils import (  # noqa: E402
 from project.hydro_selection import load_config  # noqa: E402
 
 #------------------------------------------#
-# Define model settings here.
-CONFIG_PATH = r'conf/config_dhbvv2_ann.yaml'
+# Define model settings here. 3555MiB
+CONFIG_PATH = r'conf/config_dhbv_ann.yaml'
 #------------------------------------------#
 # model training
 config = load_config(CONFIG_PATH)

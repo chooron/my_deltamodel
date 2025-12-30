@@ -16,7 +16,7 @@ import torch.nn as nn
 from dmg.models.hydrodl2 import change_param_range, uh_conv, uh_gamma
 from dmg.models.neural_networks.layers.moe import MoeLayer
 
-from project.hydro_selection.models.core import hbv_timestep_loop
+from my_deltamodel.project.hydro_selection.models.jit_core import hbv_timestep_loop
 
 
 class HbvMoeV2(torch.nn.Module):

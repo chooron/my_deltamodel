@@ -122,7 +122,6 @@ class Trainer(BaseTrainer):
         """
         name = self.config['train']['optimizer']
         optimizer_dict = {
-            # 'SGD': torch.optim.SGD,
             'Adam': torch.optim.Adam,
             'AdamW': torch.optim.AdamW,
             'Adadelta': torch.optim.Adadelta,
@@ -152,7 +151,7 @@ class Trainer(BaseTrainer):
         torch.optim.lr_scheduler.LRScheduler
             Initialized learning rate scheduler object.
         """
-        name = self.config['delta_model']['nn_model']['lr_scheduler']
+        name = self.config['delta_model']['train']['lr_scheduler']
         scheduler_dict = {
             'StepLR': torch.optim.lr_scheduler.StepLR,
             'ExponentialLR': torch.optim.lr_scheduler.ExponentialLR,
@@ -170,7 +169,7 @@ class Trainer(BaseTrainer):
         try:
             self.scheduler = cls(
                 self.optimizer,
-                **self.config['delta_model']['nn_model']['lr_scheduler_params'],
+                **self.config['delta_model']['train']['lr_scheduler_params'],
             )
         except RuntimeError as e:
             raise RuntimeError(f"Error initializing scheduler: {e}") from e
@@ -257,8 +256,7 @@ class Trainer(BaseTrainer):
         self.total_loss = 0.0
 
         # Iterate through epoch in minibatches.
-        for mb in tqdm.tqdm(range(1, n_minibatch + 1), desc=prog_str,
-                            leave=False, dynamic_ncols=True):
+        for mb in tqdm.tqdm(range(1, n_minibatch + 1), desc=prog_str, leave=False, dynamic_ncols=True):
             self.current_batch = mb
 
             dataset_sample = self.sampler.get_training_sample(
@@ -270,12 +268,15 @@ class Trainer(BaseTrainer):
             # Forward pass through model.
             _ = self.model(dataset_sample)
             loss = self.model.calc_loss(dataset_sample)
-
             loss.backward()
             
+            # phy_model = self.model.model_dict['HbvTriton'].phy_model
+            # if len(phy_model.grad_error_list) > 0:
+            #     print(f"检测到梯度爆炸的参数: {phy_model.grad_error_list}")
+            #     raise RuntimeError("Gradient NaN/Inf detected!")
             # if self.config['train'].get('clip_grad_norm', False):
             #     # Add gradient clipping here
-            #     torch.nn.utils.clip_grad_norm_(self.model.get_parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(self.model.get_parameters(), max_norm=1.0)
             
             self.optimizer.step()
             self.optimizer.zero_grad()
@@ -303,17 +304,6 @@ class Trainer(BaseTrainer):
                 clear_prior=True,
             )
 
-            # if self.config['do_tune']:
-            #     # Create temporary checkpoint if needed
-            #     chkpt = None
-            #     if epoch % self.calc_metricsconfig['tune']['save_epoch'] == 0:
-            #         with tempfile.TemporaryDirectory() as temp_dir:
-            #             model_path = os.path.join(temp_dir, "model_ep{epoch}.pt")
-            #             torch.save(self.model.state_dict(), model_path)
-            #             chkpt = Checkpoint.from_directory(temp_dir)
-
-            #     # Report to Ray Tune
-            #     tune.report(loss=self.total_loss, checkpoint=chkpt)
 
     def evaluate(self) -> None:
         """Run model evaluation and return both metrics and model outputs."""

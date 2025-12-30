@@ -40,4 +40,4 @@ class AnnModel(torch.nn.Module):
         self, x: dict[str, torch.Tensor]
     ) -> tuple[Union[None, torch.Tensor], torch.Tensor]:
         nn_out = self.core(x["c_nn_norm"])
-        return None, F.sigmoid(nn_out)
+        return None, nn_out

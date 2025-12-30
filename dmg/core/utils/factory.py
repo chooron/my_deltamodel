@@ -70,12 +70,18 @@ def load_component(
     # Convert from camel case to snake case for file name
     name_lower = camel_to_snake(class_name_without_model)
 
-    parent_dir = get_dir(directory)
-    source = os.path.join(parent_dir, f"{name_lower}.py")
+    directory_clean = directory.replace("\\", "/")
+    dir_path = Path(directory_clean)
+    if dir_path.is_absolute():
+        parent_dir = dir_path
+    else:
+        parent_dir = get_dir(directory_clean)
+
+    source = (Path(parent_dir) / f"{name_lower}.py").resolve()
 
     try:
         # Dynamically load the module
-        spec = importlib.util.spec_from_file_location(class_name, source)
+        spec = importlib.util.spec_from_file_location(class_name, str(source))
         module = importlib.util.module_from_spec(spec)
         sys.modules[class_name] = module
         spec.loader.exec_module(module)
@@ -98,9 +104,12 @@ def load_component(
 def import_phy_model(model: str, config: dict) -> type:
     """Loads a physical model, either from HydroDL2 (hydrology) or locally."""
     if "directory" in config["phy_model"].keys():
-        tmp_phy_model_dir = os.path.join(
-            os.getenv("PROJ_PATH"), config["phy_model"]["directory"]
-        )
+        proj_root = os.getenv("PROJ_PATH")
+        custom_dir = config["phy_model"]["directory"]
+        if proj_root:
+            tmp_phy_model_dir = os.path.join(proj_root, custom_dir)
+        else:
+            tmp_phy_model_dir = custom_dir
     else:
         tmp_phy_model_dir = phy_model_dir
 
@@ -225,6 +234,7 @@ def load_nn_model(
     config["nn_model"]["ny"] = phy_model.learnable_param_count
     config["nn_model"]["ny1"] = getattr(phy_model, "learnable_param_count1", ny)
     config["nn_model"]["ny2"] = getattr(phy_model, "learnable_param_count2", ny)
+    config["nn_model"]["nmul"] = config["phy_model"].get("nmul", 16)
 
     if "directory" in config["nn_model"].keys():
         tmp_nn_model_dir = os.path.join(
@@ -232,7 +242,6 @@ def load_nn_model(
         )
     else:
         tmp_nn_model_dir = nn_model_dir
-    print(tmp_nn_model_dir)
 
     # Dynamically retrieve the model
     cls = load_component(

@@ -1,0 +1,128 @@
+defaults:
+    - _self_
+    - hydra: settings
+    - observations: camels_671 # camels_531, camels_671 
+
+
+## General -------------------------------#
+mode: train  # train, test, train_test, simulation
+random_seed: 42
+device: cuda
+gpu_id: 0
+
+data_loader: HydroLoader
+data_sampler: HydroSampler
+trainer: Trainer
+
+save_path: project/triton_accelerate/output_fused
+trained_model: project/triton_accelerate/output_fused/model/
+
+
+## Training ------------------------------#
+## 使用融合 Triton kernel + 学习率调度器
+train:
+    start_time: 1980/10/01
+    end_time: 1995/09/30
+    target: [streamflow]
+    optimizer: Adadelta
+    batch_size: 100
+    epochs: 50
+    start_epoch: 0
+    save_epoch: 5
+    learning_rate: 1.0
+    # 启用学习率调度器
+    lr_scheduler: StepLR
+    lr_scheduler_params:
+        step_size: 10
+        gamma: 0.5
+
+## Evaluation -------------------------------#
+test:
+    start_time: 1995/10/01
+    end_time: 2010/09/30
+    batch_size: 100
+    test_epoch: 50
+    split_dataset: True
+
+
+## Inference -------------------------------#
+simulation:
+    start_time: 2012/10/01
+    end_time: 2014/09/30
+    batch_size: 25
+
+
+## Loss Function -------------------------#
+loss_function:
+    model: NseBatchLoss
+
+
+## Differentiable Model -----------------------------#
+delta_model:
+    rho: 365
+    
+    phy_model:
+        directory: project\triton_accelerate\models
+        model: [HbvTriton]
+        backend: fused  # 使用融合 Triton kernel
+        nmul: 16
+        warm_up: 365
+        warm_up_states: False
+        dy_drop: 0.0
+        attributes: []
+        use_log_norm: []
+        nearzero: 1e-5
+        forcings: [
+            prcp,
+            tmean,
+            pet,
+        ]
+
+    nn_model:
+        directory: project\triton_accelerate\models
+        model: AnnModel
+        dr: 0.5
+        hidden_size: 64
+        
+        forcings: [
+            prcp,
+            tmean,
+            pet,
+        ]
+        attributes: [
+            p_mean,
+            pet_mean,
+            p_seasonality,
+            frac_snow,
+            aridity,
+            high_prec_freq,
+            high_prec_dur,
+            low_prec_freq,
+            low_prec_dur,
+            elev_mean,
+            slope_mean,
+            area_gages2,
+            frac_forest,
+            lai_max,
+            lai_diff,
+            gvf_max,
+            gvf_diff,
+            dom_land_cover_frac,
+            dom_land_cover,
+            root_depth_50,
+            soil_depth_pelletier,
+            soil_depth_statsgo,
+            soil_porosity,
+            soil_conductivity,
+            max_water_content,
+            sand_frac,
+            silt_frac,
+            clay_frac,
+            geol_1st_class,
+            glim_1st_class_frac,
+            geol_2nd_class,
+            glim_2nd_class_frac,
+            carbonate_rocks_frac,
+            geol_porosity,
+            geol_permeability,
+        ]

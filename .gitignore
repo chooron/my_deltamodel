@@ -208,3 +208,8 @@ cache
 *.npz
 
 runs
+
+# project
+
+project/multiscale_moe
+# project/diff_compare

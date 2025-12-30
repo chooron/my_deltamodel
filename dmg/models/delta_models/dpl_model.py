@@ -63,7 +63,7 @@ class DplModel(torch.nn.Module):
                 "A (1) neural network and physics model or (2)"
                 + " configuration dictionary is required."
             )
-
+        
         self.initialized = True
 
     def _init_phy_model(self, phy_model_name) -> torch.nn.Module:

@@ -1,0 +1,80 @@
+HBV 模型性能基准测试结果
+================================================================================
+
+测试时间: 2025-12-10 09:52:14
+GPU: NVIDIA GeForce RTX 3080 Ti Laptop GPU
+CUDA: 12.8
+PyTorch: 2.8.0+cu128
+
+Triton | batch=32 | seq=100 | fwd=9.42ms | bwd=24.71ms | mem=0.4MB
+PyTorch | batch=32 | seq=100 | fwd=98.89ms | bwd=231.15ms | mem=2.4MB
+PyTorch JIT | batch=32 | seq=100 | fwd=31.01ms | bwd=42.84ms | mem=2.3MB
+Triton | batch=32 | seq=365 | fwd=41.89ms | bwd=105.33ms | mem=1.4MB
+PyTorch | batch=32 | seq=365 | fwd=378.05ms | bwd=866.50ms | mem=8.8MB
+PyTorch JIT | batch=32 | seq=365 | fwd=113.75ms | bwd=151.09ms | mem=8.4MB
+Triton | batch=32 | seq=730 | fwd=84.08ms | bwd=214.63ms | mem=2.9MB
+PyTorch | batch=32 | seq=730 | fwd=847.18ms | bwd=1975.67ms | mem=17.6MB
+PyTorch JIT | batch=32 | seq=730 | fwd=235.65ms | bwd=336.08ms | mem=16.9MB
+Triton | batch=32 | seq=1461 | fwd=171.66ms | bwd=430.38ms | mem=5.7MB
+PyTorch | batch=32 | seq=1461 | fwd=1723.17ms | bwd=4045.96ms | mem=35.2MB
+PyTorch JIT | batch=32 | seq=1461 | fwd=484.25ms | bwd=616.06ms | mem=33.7MB
+Triton | batch=64 | seq=100 | fwd=12.90ms | bwd=31.15ms | mem=0.5MB
+PyTorch | batch=64 | seq=100 | fwd=111.92ms | bwd=252.93ms | mem=2.5MB
+PyTorch JIT | batch=64 | seq=100 | fwd=38.31ms | bwd=47.57ms | mem=2.4MB
+Triton | batch=64 | seq=365 | fwd=47.68ms | bwd=103.35ms | mem=1.8MB
+PyTorch | batch=64 | seq=365 | fwd=424.64ms | bwd=942.56ms | mem=9.0MB
+PyTorch JIT | batch=64 | seq=365 | fwd=125.63ms | bwd=160.98ms | mem=8.7MB
+Triton | batch=64 | seq=730 | fwd=91.57ms | bwd=213.42ms | mem=3.6MB
+PyTorch | batch=64 | seq=730 | fwd=842.76ms | bwd=2060.83ms | mem=18.0MB
+PyTorch JIT | batch=64 | seq=730 | fwd=242.33ms | bwd=313.44ms | mem=17.3MB
+Triton | batch=64 | seq=1461 | fwd=181.34ms | bwd=432.66ms | mem=7.2MB
+PyTorch | batch=64 | seq=1461 | fwd=1670.49ms | bwd=4006.13ms | mem=36.0MB
+PyTorch JIT | batch=64 | seq=1461 | fwd=459.76ms | bwd=617.42ms | mem=34.6MB
+Triton | batch=128 | seq=100 | fwd=12.77ms | bwd=30.11ms | mem=0.7MB
+PyTorch | batch=128 | seq=100 | fwd=124.09ms | bwd=242.18ms | mem=2.6MB
+PyTorch JIT | batch=128 | seq=100 | fwd=37.62ms | bwd=45.69ms | mem=2.5MB
+Triton | batch=128 | seq=365 | fwd=47.05ms | bwd=107.21ms | mem=2.5MB
+PyTorch | batch=128 | seq=365 | fwd=418.52ms | bwd=971.78ms | mem=9.5MB
+PyTorch JIT | batch=128 | seq=365 | fwd=133.10ms | bwd=151.50ms | mem=9.1MB
+Triton | batch=128 | seq=730 | fwd=93.38ms | bwd=206.39ms | mem=5.0MB
+PyTorch | batch=128 | seq=730 | fwd=1039.13ms | bwd=2467.65ms | mem=18.9MB
+PyTorch JIT | batch=128 | seq=730 | fwd=273.39ms | bwd=334.76ms | mem=18.2MB
+Triton | batch=128 | seq=1461 | fwd=204.64ms | bwd=453.03ms | mem=10.0MB
+PyTorch | batch=128 | seq=1461 | fwd=1893.00ms | bwd=4689.37ms | mem=37.8MB
+PyTorch JIT | batch=128 | seq=1461 | fwd=550.58ms | bwd=725.24ms | mem=36.4MB
+Triton | batch=256 | seq=100 | fwd=13.99ms | bwd=33.07ms | mem=1.4MB
+PyTorch | batch=256 | seq=100 | fwd=151.93ms | bwd=321.39ms | mem=5.2MB
+PyTorch JIT | batch=256 | seq=100 | fwd=47.82ms | bwd=54.53ms | mem=5.0MB
+Triton | batch=256 | seq=365 | fwd=55.03ms | bwd=120.86ms | mem=5.0MB
+PyTorch | batch=256 | seq=365 | fwd=513.13ms | bwd=1186.55ms | mem=18.9MB
+PyTorch JIT | batch=256 | seq=365 | fwd=149.54ms | bwd=179.56ms | mem=18.2MB
+Triton | batch=256 | seq=730 | fwd=118.86ms | bwd=256.70ms | mem=10.0MB
+PyTorch | batch=256 | seq=730 | fwd=978.06ms | bwd=2283.79ms | mem=37.8MB
+PyTorch JIT | batch=256 | seq=730 | fwd=278.14ms | bwd=354.71ms | mem=36.4MB
+Triton | batch=256 | seq=1461 | fwd=200.64ms | bwd=448.49ms | mem=20.0MB
+PyTorch | batch=256 | seq=1461 | fwd=1939.51ms | bwd=4794.80ms | mem=75.7MB
+PyTorch JIT | batch=256 | seq=1461 | fwd=534.51ms | bwd=686.46ms | mem=72.8MB
+Triton | batch=512 | seq=100 | fwd=13.59ms | bwd=33.54ms | mem=2.8MB
+PyTorch | batch=512 | seq=100 | fwd=167.61ms | bwd=386.35ms | mem=10.4MB
+PyTorch JIT | batch=512 | seq=100 | fwd=46.51ms | bwd=56.44ms | mem=10.0MB
+Triton | batch=512 | seq=365 | fwd=52.32ms | bwd=116.25ms | mem=10.0MB
+PyTorch | batch=512 | seq=365 | fwd=539.97ms | bwd=1279.57ms | mem=37.9MB
+PyTorch JIT | batch=512 | seq=365 | fwd=164.27ms | bwd=187.85ms | mem=36.4MB
+Triton | batch=512 | seq=730 | fwd=102.80ms | bwd=230.20ms | mem=20.0MB
+PyTorch | batch=512 | seq=730 | fwd=1028.46ms | bwd=2356.44ms | mem=75.6MB
+PyTorch JIT | batch=512 | seq=730 | fwd=289.22ms | bwd=357.47ms | mem=72.8MB
+Triton | batch=512 | seq=1461 | fwd=218.09ms | bwd=467.15ms | mem=40.0MB
+PyTorch | batch=512 | seq=1461 | fwd=2024.30ms | bwd=4719.68ms | mem=151.3MB
+PyTorch JIT | batch=512 | seq=1461 | fwd=541.31ms | bwd=657.60ms | mem=145.6MB
+Triton | batch=1024 | seq=100 | fwd=14.85ms | bwd=32.87ms | mem=5.6MB
+PyTorch | batch=1024 | seq=100 | fwd=162.48ms | bwd=321.15ms | mem=20.8MB
+PyTorch JIT | batch=1024 | seq=100 | fwd=47.67ms | bwd=51.06ms | mem=20.1MB
+Triton | batch=1024 | seq=365 | fwd=58.03ms | bwd=118.57ms | mem=20.1MB
+PyTorch | batch=1024 | seq=365 | fwd=528.99ms | bwd=1186.21ms | mem=75.7MB
+PyTorch JIT | batch=1024 | seq=365 | fwd=154.66ms | bwd=192.19ms | mem=72.9MB
+Triton | batch=1024 | seq=730 | fwd=113.84ms | bwd=249.07ms | mem=40.1MB
+PyTorch | batch=1024 | seq=730 | fwd=1031.68ms | bwd=2321.05ms | mem=151.3MB
+PyTorch JIT | batch=1024 | seq=730 | fwd=274.69ms | bwd=347.59ms | mem=145.6MB
+Triton | batch=1024 | seq=1461 | fwd=215.75ms | bwd=450.72ms | mem=80.0MB
+PyTorch | batch=1024 | seq=1461 | fwd=1940.17ms | bwd=4671.25ms | mem=302.6MB
+PyTorch JIT | batch=1024 | seq=1461 | fwd=529.27ms | bwd=692.40ms | mem=291.2MB
