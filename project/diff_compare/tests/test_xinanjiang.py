@@ -6,15 +6,17 @@ import torch
 import numpy as np
 import plotly.graph_objects as go
 
+
+# "请你修改这个代码@test_xinanjiang.py ，现在我需要让他更具备通用性，让他能够测试所有的流域，现在第一个需要修改的是，我们现在是需要直接预测整个流域的结果，"
 # 将项目根目录添加到路径中，以便导入 dmg 模块
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from dmg.models.hydromodel.xinanjiang import (
-    xinanjiang_step_all,
-    create_initial_state,
+from dmg.models.hydromodel.xinanjiang import (  # noqa
+    xinanjiang_step,  # noqa
+    create_initial_state,  # noqa
 )  # noqa
 
 
@@ -45,7 +47,9 @@ def run_test():
     print(f"Loading dataset from {dataset_path}...")
     with open(dataset_path, "rb") as f:
         forcing, target, attr = pickle.load(f)
-    print(f"Original Forcing shape: {forcing.shape}, Target shape: {target.shape}")
+    print(
+        f"Original Forcing shape: {forcing.shape}, Target shape: {target.shape}"
+    )
 
     # --- 时间范围选取 ---
     # 原数据集范围: 1980/10/01 - 2014/09/30
@@ -61,7 +65,9 @@ def run_test():
     forcing = forcing[:, start_idx:end_idx, :]
     target = target[:, start_idx:end_idx, :]
     print(f"SubsetName range: 1989/01/01 to 2009/12/31")
-    print(f"Subset Forcing shape: {forcing.shape}, Subset Target shape: {target.shape}")
+    print(
+        f"Subset Forcing shape: {forcing.shape}, Subset Target shape: {target.shape}"
+    )
 
     target = flow_conversion(attr, target)
 
@@ -120,13 +126,26 @@ def run_test():
 
     # 6. 时间步循环模拟
     num_steps = b_forcing.shape[0]
-    
+
     # 准备存储所有结果的字典
     results = {
-        "P": [], "T": [], "PET": [], "Q_obs": [],
-        "Q_sim": [], "Ea": [], "flux_r": [], "flux_e": [],
-        "flux_rs": [], "flux_ri": [], "flux_rg": [],
-        "flux_qi": [], "flux_qg": [], "S1": [], "S2": [], "S3": [], "S4": []
+        "P": [],
+        "T": [],
+        "PET": [],
+        "Q_obs": [],
+        "Q_sim": [],
+        "Ea": [],
+        "flux_r": [],
+        "flux_e": [],
+        "flux_rs": [],
+        "flux_ri": [],
+        "flux_rg": [],
+        "flux_qi": [],
+        "flux_qg": [],
+        "S1": [],
+        "S2": [],
+        "S3": [],
+        "S4": [],
     }
 
     print(f"Simulation in progress for {num_steps} steps...")
@@ -137,15 +156,26 @@ def run_test():
         PET_t = b_forcing[t, 2:3].unsqueeze(0)  # (1, 1)
 
         # 调用模型 step 函数
-        (
-            Qsim, Ea, flux_r, flux_e, flux_rs, flux_ri, flux_rg,
-            flux_qi, flux_qg, S1, S2, S3, S4
-        ) = xinanjiang_step_all(
-            P_t, T_t, PET_t,
-            p["aim"], p["par_a"], p["par_b"], p["stot"],
-            p["fwm"], p["flm"], p["par_c"], p["ex"],
-            p["ki"], p["kg"], p["ci"], p["cg"],
-            S1, S2, S3, S4,
+        (Qsim, Ea, S1, S2, S3, S4) = xinanjiang_step(
+            P_t,
+            T_t,
+            PET_t,
+            p["aim"],
+            p["par_a"],
+            p["par_b"],
+            p["stot"],
+            p["fwm"],
+            p["flm"],
+            p["par_c"],
+            p["ex"],
+            p["ki"],
+            p["kg"],
+            p["ci"],
+            p["cg"],
+            S1,
+            S2,
+            S3,
+            S4,
         )
 
         # 记录所有值
@@ -170,9 +200,9 @@ def run_test():
     # 导出为 CSV
     results_df = pd.DataFrame(results)
     # 生成时间列
-    date_range = pd.date_range(start=target_start, periods=num_steps, freq='D')
-    results_df.insert(0, 'Date', date_range)
-    
+    date_range = pd.date_range(start=target_start, periods=num_steps, freq="D")
+    results_df.insert(0, "Date", date_range)
+
     output_csv = f"xinanjiang_results_gauge_{gauge_id_to_test}.csv"
     results_df.to_csv(output_csv, index=False)
     print(f"All simulation results saved to {output_csv}")

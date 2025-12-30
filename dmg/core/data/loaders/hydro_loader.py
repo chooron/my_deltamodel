@@ -225,6 +225,14 @@ class HydroLoader(BaseLoader):
         with open(data_path, "rb") as f:
             forcings, target, attributes = pickle.load(f)
 
+        # if using camels_559, change the pet formula (Priestley-Taylor)
+        if self.config["observations"]["name"] == "camels_559":
+            datav2_path = os.path.join(
+                os.getenv("DATA_PATH", "."), "camels_forcing_v2.pkl"
+            )
+            with open(datav2_path, "rb") as f:
+                forcings = pickle.load(f)
+
         forcings = np.transpose(forcings[:, idx_start:idx_end], (1, 0, 2))
 
         # Forcing subset for phy model
@@ -268,19 +276,24 @@ class HydroLoader(BaseLoader):
         x_nn = forcings[:, :, nn_forc_idx]
         c_nn = attributes[:, nn_attr_idx]
         target = np.transpose(target[:, idx_start:idx_end], (1, 0, 2))
-        gage_info = np.load(os.path.join(os.getenv("DATA_PATH", "."), "gage_id.npy"))
+        gage_info = np.load(
+            os.path.join(os.getenv("DATA_PATH", "."), "gage_id.npy")
+        )
         # Subset basins if necessary
         if self.config["observations"]["name"] == "camels_531":
-            subset_path = os.path.join(os.getenv("DATA_PATH", "."), "531sub_id.txt")
+            subset_path = os.path.join(
+                os.getenv("DATA_PATH", "."), "531sub_id.txt"
+            )
             with open(subset_path) as f:
                 selected_basins = json.load(f)
-
             subset_idx = intersect(selected_basins, gage_info)
         elif self.config["observations"]["name"] == "camels_559":
-            subset_path = os.path.join(os.getenv("DATA_PATH", "."), "559sub_id.txt")
+            subset_path = os.path.join(
+                os.getenv("DATA_PATH", "."), "559sub_id.txt"
+            )
             with open(subset_path) as f:
                 selected_basins = json.load(f)
-            subset_idx = intersect(selected_basins, gage_info)    
+            subset_idx = intersect(selected_basins, gage_info)
         else:
             subset_idx = range(len(gage_info))
 
