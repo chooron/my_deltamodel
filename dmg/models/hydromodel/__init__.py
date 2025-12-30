@@ -20,8 +20,8 @@ from .mopex2 import MOPEX2_PARAMS_BOUNDS, mopex2_step, create_initial_state as m
 from .mopex3 import MOPEX3_PARAMS_BOUNDS, mopex3_step, create_initial_state as mopex3_init
 from .mopex4 import MOPEX4_PARAMS_BOUNDS, mopex4_step, create_initial_state as mopex4_init
 from .mopex5 import MOPEX5_PARAMS_BOUNDS, mopex5_step, create_initial_state as mopex5_init
-from .nerzealand1 import NERZEALAND1_PARAMS_BOUNDS, nerzealand1_step, create_initial_state as nerzealand1_init
-from .nerzealand2 import NERZEALAND2_PARAMS_BOUNDS, nerzealand2_step, create_initial_state as nerzealand2_init
+from .newzealand1 import NEWZEALAND1_PARAMS_BOUNDS, newzealand1_step, create_initial_state as newzealand1_init
+from .newzealand2 import NEWZEALAND2_PARAMS_BOUNDS, newzealand2_step, create_initial_state as newzealand2_init
 from .penman import PENMAN_PARAMS_BOUNDS, penman_step, create_initial_state as penman_init
 from .plateau import PLATEAU_PARAMS_BOUNDS, plateau_step, create_initial_state as plateau_init
 from .sacramento import SACRAMENTO_PARAMS_BOUNDS, sacramento_step, create_initial_state as sacramento_init
@@ -60,8 +60,8 @@ PARAM_INFO = {
     "mopex3": MOPEX3_PARAMS_BOUNDS,
     "mopex4": MOPEX4_PARAMS_BOUNDS,
     "mopex5": MOPEX5_PARAMS_BOUNDS,
-    "nerzealand1": NERZEALAND1_PARAMS_BOUNDS,
-    "nerzealand2": NERZEALAND2_PARAMS_BOUNDS,
+    "newzealand1": NEWZEALAND1_PARAMS_BOUNDS,
+    "newzealand2": NEWZEALAND2_PARAMS_BOUNDS,
     "penman": PENMAN_PARAMS_BOUNDS,
     "plateau": PLATEAU_PARAMS_BOUNDS,
     "sacramento": SACRAMENTO_PARAMS_BOUNDS,
@@ -101,8 +101,8 @@ STFN_INFO = {
     "mopex3": mopex3_step,
     "mopex4": mopex4_step,
     "mopex5": mopex5_step,
-    "nerzealand1": nerzealand1_step,
-    "nerzealand2": nerzealand2_step,
+    "newzealand1": newzealand1_step,
+    "newzealand2": newzealand2_step,
     "penman": penman_step,
     "plateau": plateau_step,
     "sacramento": sacramento_step,
@@ -142,8 +142,8 @@ INIT_INFO = {
     "mopex3": mopex3_init,
     "mopex4": mopex4_init,
     "mopex5": mopex5_init,
-    "nerzealand1": nerzealand1_init,
-    "nerzealand2": nerzealand2_init,
+    "newzealand1": newzealand1_init,
+    "newzealand2": newzealand2_init,
     "penman": penman_init,
     "plateau": plateau_init,
     "sacramento": sacramento_init,
@@ -183,8 +183,8 @@ STATE_INFO = {
     "mopex3": 3,
     "mopex4": 5,
     "mopex5": 5,
-    "nerzealand1": 3,
-    "nerzealand2": 2,
+    "newzealand1": 3,
+    "newzealand2": 2,
     "penman": 1,
     "plateau": 4,
     "sacramento": 5,

@@ -58,7 +58,7 @@ delta_model:
 
   phy_model:
     model: [Unify]
-    model_name: collie3
+    model_name: xinanjiang
     nmul: 1
     warm_up: 365
     warm_up_states: False
