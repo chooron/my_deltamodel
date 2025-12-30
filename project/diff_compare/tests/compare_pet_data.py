@@ -109,5 +109,62 @@ plt.xlabel("Old PET")
 plt.ylabel("New PET")
 plt.title(f"Correlation: {correlations[idx]:.4f}")
 
+# --- 7. 额外检查 v2 版本的 NaN 问题 (特别是 1989-2010) ---
+if isinstance(data_new, dict) and "dates" in data_new:
+    print("\n" + "=" * 30)
+    print("   v2 数据 NaN 检查 (1989-2010)")
+    print("=" * 30)
+
+    dates = np.array(data_new["dates"])
+    # 假设 dates 是 datetime 对象或包含年份的字符串
+    # 如果是 datetime 对象，直接取 .year；如果是字符串，根据格式转换
+    try:
+        years = np.array([d.year for d in dates])
+    except AttributeError:
+        # 如果是字符串，尝试解析年份 (假设前4位是年份)
+        years = np.array([int(str(d)[:4]) for d in dates])
+
+    mask_89_10 = (years >= 1989) & (years <= 2010)
+    indices_89_10 = np.where(mask_89_10)[0]
+
+    if len(indices_89_10) > 0:
+        forcing_slice = forcing_new[:, indices_89_10, :]
+        nan_count = np.isnan(forcing_slice).sum()
+        total_elements = forcing_slice.size
+
+        print(
+            f"检查时段: {years[indices_89_10[0]]} 至 {years[indices_89_10[-1]]}"
+        )
+        print(f"时间步数: {len(indices_89_10)}")
+        print(f"总数据量: {total_elements}")
+        print(f"NaN 总数:  {nan_count}")
+
+        if nan_count > 0:
+            var_names = data_new.get("variable_names", ["P", "T", "PET"])
+            for feat_idx in range(forcing_slice.shape[2]):
+                feat_nan = np.isnan(forcing_slice[:, :, feat_idx]).sum()
+                var_name = (
+                    var_names[feat_idx]
+                    if feat_idx < len(var_names)
+                    else f"Feat_{feat_idx}"
+                )
+                print(f"  - {var_name}: {feat_nan} NaNs")
+
+            # 检查哪些流域有 NaN
+            basins_with_nan = np.where(
+                np.isnan(forcing_slice).any(axis=(1, 2))
+            )[0]
+            print(f"含有 NaN 的流域数量: {len(basins_with_nan)}")
+            if len(basins_with_nan) > 0:
+                print(
+                    f"前 5 个含 NaN 的流域索引: {basins_with_nan[:5].tolist()}"
+                )
+        else:
+            print("恭喜！1989-2010 时段未发现 NaN。")
+    else:
+        print("未找到 1989-2010 时段的数据。")
+else:
+    print("\n无法进行 NaN 检查：v2 数据格式不包含 'dates' 信息。")
+
 plt.tight_layout()
 plt.show()
