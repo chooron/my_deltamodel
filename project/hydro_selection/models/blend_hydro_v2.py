@@ -24,8 +24,10 @@ from dmg.models.hydrodl2 import change_param_range, uh_conv, uh_gamma
 from project.hydro_selection.models.layers import hydro_core
 
 
-class BlendHydroV1(nn.Module):
+class BlendHydroV2(nn.Module):
     """Blend of multiple JIT hydrological cores.
+
+    这个v2.1版本是通过流域静态属性来预测模型的组合权重,实现每个模型的加权求和,考虑预测16个加权结果,后续再考虑4个模型集成后的加权结果
 
     The model consumes a pair of tensors `parameters = (raw_phy_dy, raw_phy_static)`
     produced by an upstream network, mirroring the interface of `Hbv`. The
@@ -109,7 +111,7 @@ class BlendHydroV1(nn.Module):
         if "dynamic_params" in config:
             # Expecting dict keyed by model name, e.g. {"HBV": ["parK0", ...]}
             self.dynamic_params = config.get("dynamic_params", {})
-        
+
         if "selected_models" in config:
             selected = [m.upper() for m in config["selected_models"]]
             # Filter to only supported ones and maintain internal order if possible
@@ -117,17 +119,16 @@ class BlendHydroV1(nn.Module):
             if order:
                 self.model_order = order
             print(self.model_order)
-        
+            self.n_models = len(selected)
+
         # New: compilation setting (jit, torch.compile, none)
         self.compile_type = config.get("compile_type", "jit")
 
     def _set_parameters(self) -> None:
         self.routing_param_names = list(self.routing_parameter_bounds.keys())
 
-        # Distribute nmul budget across models
-        n_models = len(self.model_order)
         # We treat the configured nmul as the total target budget
-        self.nmul = max(1, self.nmul // n_models)
+        self.nmul = max(1, self.nmul // self.n_models)
 
         # Build per-model param name lists
         self.phy_param_names_by_model: Dict[str, List[str]] = {}
@@ -142,8 +143,10 @@ class BlendHydroV1(nn.Module):
             static_total += static_count
 
         self.learnable_param_count1 = dy_total * self.nmul
-        self.learnable_param_count2 = static_total * self.nmul + len(
-            self.routing_param_names
+        self.learnable_param_count2 = (
+            static_total * self.nmul
+            + len(self.routing_param_names)
+            + self.nmul * self.n_models
         )
         self.learnable_param_count = (
             self.learnable_param_count1 + self.learnable_param_count2
@@ -183,7 +186,10 @@ class BlendHydroV1(nn.Module):
     # Tensor helpers
     # ------------------------------------------------------------------
     def _descale_params(
-        self, params: torch.Tensor, names: List[str], bounds: Dict[str, List[float]]
+        self,
+        params: torch.Tensor,
+        names: List[str],
+        bounds: Dict[str, List[float]],
     ) -> Dict[str, torch.Tensor]:
         return {
             name: change_param_range(params[:, i, :], bounds[name])
@@ -191,7 +197,10 @@ class BlendHydroV1(nn.Module):
         }
 
     def _descale_dynamic_params(
-        self, params: torch.Tensor, names: List[str], bounds: Dict[str, List[float]]
+        self,
+        params: torch.Tensor,
+        names: List[str],
+        bounds: Dict[str, List[float]],
     ) -> Dict[str, torch.Tensor]:
         n_steps, n_grid = params.shape[:2]
         pmat = torch.ones([1, n_grid, 1], device=self.device)
@@ -206,19 +215,44 @@ class BlendHydroV1(nn.Module):
             result[name] = change_param_range(combined, bounds[name])
         return result
 
-    def _descale_routing_params(self, params: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def _descale_routing_params(
+        self, params: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
         return {
             name: change_param_range(
                 params[:, i], self.routing_parameter_bounds[name]
             )
             for i, name in enumerate(self.routing_parameter_bounds.keys())
         }
+    
+    @staticmethod
+    def weight_norm(x:torch.Tensor, dim=-1):
+        print("min:", x.min().item(), "max:", x.max().item())
+        # 1. Softplus 保证非负，且数值与 x 线性相关（不爆炸）
+        x = torch.nn.functional.softplus(x)
+        
+        # 2. 计算和
+        s = x.sum(dim=dim, keepdim=True)
+        
+        # 3. 【双重保险】防止所有 logit 极小导致 sum 接近 0
+        # 虽然 softplus > 0，但计算机精度下 softplus(-100) == 0
+        # 加上 clamp 保证分母至少是 1e-6，避免除法得到天文数字
+        s = torch.clamp(s, min=1e-6)
+        
+        return x / s
 
     def unpack_parameters(
         self, parameters: Tuple[Union[None, torch.Tensor], torch.Tensor]
-    ) -> Tuple[Dict[str, Union[None, torch.Tensor]], Dict[str, torch.Tensor], torch.Tensor]:
+    ) -> Tuple[
+        Dict[str, Union[None, torch.Tensor]],
+        Dict[str, torch.Tensor],
+        torch.Tensor,
+        torch.Tensor,
+    ]:
         """Split concatenated parameter tensors into per-model blocks."""
-        dy_count_total = sum(len(self.dynamic_params.get(m, [])) for m in self.model_order)
+        dy_count_total = sum(
+            len(self.dynamic_params.get(m, [])) for m in self.model_order
+        )
         static_counts = [
             len(self.parameter_bounds_by_model[m])
             - len(self.dynamic_params.get(m, []))
@@ -226,13 +260,16 @@ class BlendHydroV1(nn.Module):
         ]
 
         raw_phy_dy, raw_phy_static = parameters
-        raw_phy_dy = self.activate(raw_phy_dy)
-        raw_phy_static = self.activate(raw_phy_static)
 
-        phy_dy_dict: Dict[str, Optional[torch.Tensor]] = {m: None for m in self.model_order}
+        phy_dy_dict: Dict[str, Optional[torch.Tensor]] = {
+            m: None for m in self.model_order
+        }
         if raw_phy_dy is not None:
             phy_dy = raw_phy_dy.view(
-                raw_phy_dy.shape[0], raw_phy_dy.shape[1], dy_count_total, self.nmul
+                raw_phy_dy.shape[0],
+                raw_phy_dy.shape[1],
+                dy_count_total,
+                self.nmul,
             )
             offset = 0
             for m in self.model_order:
@@ -244,7 +281,14 @@ class BlendHydroV1(nn.Module):
         # static + routing
         total_static = sum(static_counts)
         static_block = raw_phy_static[:, : total_static * self.nmul]
-        routing_block = raw_phy_static[:, total_static * self.nmul :]
+        routing_block = raw_phy_static[
+            :, total_static * self.nmul : -self.nmul * self.n_models
+        ]
+        static_block = self.activate(static_block)
+        routing_block = self.activate(routing_block)
+        nmul_weights = self.weight_norm(
+            raw_phy_static[:, -self.nmul * self.n_models :], dim=-1
+        )
 
         phy_static = static_block.view(
             static_block.shape[0], total_static, self.nmul
@@ -256,7 +300,7 @@ class BlendHydroV1(nn.Module):
             phy_static_dict[m] = phy_static[:, offset : offset + sc, :]
             offset += sc
 
-        return phy_dy_dict, phy_static_dict, routing_block
+        return phy_dy_dict, phy_static_dict, routing_block, nmul_weights
 
     # Prepare parameters per model (descale dynamic/static when available)
     def get_model_params(
@@ -289,7 +333,6 @@ class BlendHydroV1(nn.Module):
                 merged[name] = static_params[name]
         return merged
 
-
     # ------------------------------------------------------------------
     # Routing
     # ------------------------------------------------------------------
@@ -319,7 +362,9 @@ class BlendHydroV1(nn.Module):
         if not self.warm_up_states:
             self.pred_cutoff = self.warm_up
 
-        phy_dy_dict, phy_static_dict, phy_route = self.unpack_parameters(parameters)
+        phy_dy_dict, phy_static_dict, phy_route, nmul_weights = (
+            self.unpack_parameters(parameters)
+        )
         self.routing_param_dict = self._descale_routing_params(phy_route)
 
         n_steps, n_grid = x.shape[:2]
@@ -353,9 +398,9 @@ class BlendHydroV1(nn.Module):
             with torch.cuda.stream(stream):
                 # 获取该模型对应的 Kernel
                 kernel = self.kernels[model_name]
-                q = kernel(
-                    P, T, PET, **current_params, nearzero=self.nearzero
-                )[0]
+                q = kernel(P, T, PET, **current_params, nearzero=self.nearzero)[
+                    0
+                ]
                 per_model_qsim[model_name] = q
 
         # 等待所有流完成
@@ -366,10 +411,8 @@ class BlendHydroV1(nn.Module):
         # ==========================================
 
         # Blend: Concatenate experts from all models and average the whole pool
-        all_q = torch.cat(
-            [per_model_qsim[m] for m in self.model_order], dim=-1
-        )
-        blend_q = all_q.mean(-1)
+        all_q = torch.cat([per_model_qsim[m] for m in self.model_order], dim=-1)
+        blend_q = (all_q * nmul_weights).sum(-1)
 
         Qrouted = self._apply_routing(blend_q, n_steps, n_grid)
 

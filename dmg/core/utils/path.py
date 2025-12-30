@@ -318,6 +318,8 @@ class PathBuilder(BaseModel):
             Configuration dictionary.
         """
         models = config["delta_model"]["phy_model"]["model"]
+        if "model_name" in config["delta_model"]["phy_model"]:
+            models = [config["delta_model"]["phy_model"]["model_name"]]
         return "_".join(models)
 
     @staticmethod

@@ -199,6 +199,11 @@ class DlLoader(BaseLoader):
             with open(subset_path) as f:
                 selected_basins = json.load(f)
             subset_idx = intersect(selected_basins, gage_info)
+        elif self.config['observations']['name'] == "camels_559":
+            subset_path = os.path.join(os.getenv("DATA_PATH"), "559sub_id.txt")
+            with open(subset_path) as f:
+                selected_basins = json.load(f)
+            subset_idx = intersect(selected_basins, gage_info)
         else:
             subset_idx = range(len(gage_info))
 

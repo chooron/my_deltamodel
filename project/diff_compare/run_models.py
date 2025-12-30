@@ -4,7 +4,6 @@ import sys
 from dotenv import load_dotenv
 
 load_dotenv()
-
 sys.path.append(os.getenv("PROJ_PATH"))  # type: ignore
 from dmg import ModelHandler  # noqa: E402
 from dmg.core.utils import (  # noqa: E402
@@ -12,7 +11,7 @@ from dmg.core.utils import (  # noqa: E402
     import_trainer,
     set_randomseed,
 )
-from project.triton_accelerate import load_config  # noqa: E402
+from project.diff_compare import load_config  # noqa: E402
 
 # ------------------------------------------#
 # Define model settings here.
@@ -30,12 +29,12 @@ trainer = trainer_cls(
     config, model, train_dataset=data_loader.train_dataset, verbose=True
 )
 
-# trainer.train()
+trainer.train()
 print(f"Training complete. Model saved to {config['model_path']}")
 
 # model evaluation
 config["mode"] = "test"
-config["test"]["test_epoch"] = 20
+config["test"]["test_epoch"] = 50
 set_randomseed(config["random_seed"])
 
 model = ModelHandler(config, verbose=True)

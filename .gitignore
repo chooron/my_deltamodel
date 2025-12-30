@@ -212,4 +212,4 @@ runs
 # project
 
 project/multiscale_moe
-project/diff_compare
+# project/diff_compare

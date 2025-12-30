@@ -641,13 +641,13 @@ class HbvStepFused(torch.autograd.Function):
         )
         
         # 梯度裁剪
-        # grad_clip = 1e3
-        # grads = [g_p, g_t, g_pet, g_snow, g_melt, g_sm, g_suz, g_slz,
-        #          g_tt, g_cfmax, g_cfr, g_cwh, g_fc, g_beta, g_lp, g_betaet, g_c,
-        #          g_perc, g_k0, g_k1, g_k2, g_uzl]
-        # for g in grads:
-        #     g.nan_to_num_(nan=0.0, posinf=grad_clip, neginf=-grad_clip)
-        #     g.clamp_(-grad_clip, grad_clip)
+        grad_clip = 1e3
+        grads = [g_p, g_t, g_pet, g_snow, g_melt, g_sm, g_suz, g_slz,
+                 g_tt, g_cfmax, g_cfr, g_cwh, g_fc, g_beta, g_lp, g_betaet, g_c,
+                 g_perc, g_k0, g_k1, g_k2, g_uzl]
+        for g in grads:
+            g.nan_to_num_(nan=0.0, posinf=grad_clip, neginf=-grad_clip)
+            g.clamp_(-grad_clip, grad_clip)
         
         return (g_p, g_t, g_pet, g_snow, g_melt, g_sm, g_suz, g_slz,
                 g_tt, g_cfmax, g_cfr, g_cwh, g_fc, g_beta, g_lp, g_betaet, g_c,
