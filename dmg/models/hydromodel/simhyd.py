@@ -11,13 +11,13 @@ from ..marrmot.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_18_simhyd_7p_3s)
 SIMHYD_PARAMS_BOUNDS = {
-    "insc": [0.0, 5.0],      # Maximum interception capacity [mm]
-    "coeff": [0.0, 600.0],   # Maximum infiltration loss parameter [mm]
-    "sq": [0.0, 15.0],       # Infiltration loss exponent [-]
-    "smsc": [1.0, 2000.0],   # Maximum soil moisture capacity [mm]
-    "sub": [0.0, 1.0],       # Interflow proportionality constant [-]
-    "crak": [0.0, 1.0],      # Recharge proportionality constant [-]
-    "k": [0.0, 1.0],         # Slow flow time scale [d-1]
+    "insc": [0.0, 5.0],  # Maximum interception capacity [mm]
+    "coeff": [0.0, 600.0],  # Maximum infiltration loss parameter [mm]
+    "sq": [0.0, 15.0],  # Infiltration loss exponent [-]
+    "smsc": [1.0, 2000.0],  # Maximum soil moisture capacity [mm]
+    "sub": [0.0, 1.0],  # Interflow proportionality constant [-]
+    "crak": [0.0, 1.0],  # Recharge proportionality constant [-]
+    "k": [0.0, 1.0],  # Slow flow time scale [d-1]
 }
 
 # Parameter description dictionary
@@ -64,29 +64,32 @@ def simhyd_step(
     S2: torch.Tensor,
     S3: torch.Tensor,
     nearzero: float = 1e-6,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
     """
     SimHyd model single-step calculation.
-    
+
     Model reference:
-    Chiew, F. H. S., Peel, M. C., & Western, A. W. (2002). Application and 
+    Chiew, F. H. S., Peel, M. C., & Western, A. W. (2002). Application and
     testing of the simple rainfall-runoff model SIMHYD.
     """
 
     # --- 1. Interception Process (S1) ---
     # flux_EXC: Excess rainfall after interception
     flux_EXC = interception_1(P, S1, insc, nearzero=nearzero)
-    flux_EXC = torch.clamp(flux_EXC, min=0.0, max=P)
-    
+    zeros = torch.zeros_like(flux_EXC)
+    flux_EXC = torch.clamp(flux_EXC, min=zeros, max=P)
+
     # State update for interception evaporation
     S1_tmp = S1 + P - flux_EXC
     S1_tmp = torch.clamp(S1_tmp, min=nearzero)
-    
+
     # flux_Ei: Evaporation from interception store
     flux_Ei = evap_1(S1_tmp, PET, nearzero=nearzero)
     flux_Ei = torch.minimum(flux_Ei, S1_tmp - nearzero)
     flux_Ei = F.relu(flux_Ei)
-    
+
     # Final S1 update
     S1_new = S1_tmp - flux_Ei
     S1_new = torch.clamp(S1_new, min=nearzero)
@@ -96,34 +99,34 @@ def simhyd_step(
     # flux_INF: Infiltration into the soil
     flux_INF = infiltration_1(coeff, sq, S2, smsc, flux_EXC, nearzero=nearzero)
     flux_INF = torch.minimum(flux_INF, flux_EXC)
-    
+
     # flux_SRUN: Surface runoff (Saturation excess before infiltration)
     flux_SRUN = F.relu(flux_EXC - flux_INF)
-    
+
     # Step 2.2: Internal soil moisture split
     # flux_INT: Interflow from infiltrated water
     flux_INT = interflow_1(sub, S2, smsc, flux_INF, nearzero=nearzero)
     flux_INT = torch.minimum(flux_INT, flux_INF)
-    
+
     # flux_REC: Groundwater recharge
     flux_rem_inf = F.relu(flux_INF - flux_INT)
     flux_REC = recharge_1(crak, S2, smsc, flux_rem_inf, nearzero=nearzero)
     flux_REC = torch.minimum(flux_REC, flux_rem_inf)
-    
+
     # flux_SMF: Soil moisture filling flux
     flux_SMF = F.relu(flux_rem_inf - flux_REC)
-    
+
     # flux_GWF: Saturation excess from soil moisture store to groundwater
     flux_GWF = saturation_1(flux_SMF, S2, smsc, nearzero=nearzero)
-    flux_GWF = torch.clamp(flux_GWF, min=0.0, max=flux_SMF)
-    
+    flux_GWF = torch.clamp(flux_GWF, min=zeros, max=flux_SMF)
+
     # Step 2.3: State update and Evapotranspiration
     S2_tmp = S2 + flux_SMF - flux_GWF
     S2_tmp = torch.clamp(S2_tmp, min=nearzero)
-    
+
     # Remaining PET after interception ET
     pet_rem = F.relu(PET - flux_Ei)
-    
+
     # flux_Et: Transpiration from soil
     # MATLAB: evap_2(10, S2, smsc, Ep) - p1=10 is used as a constant
     p1_const = torch.tensor(10.0, device=P.device)
@@ -131,7 +134,7 @@ def simhyd_step(
     flux_Et = torch.minimum(flux_Et, S2_tmp - nearzero)
     flux_Et = torch.minimum(flux_Et, pet_rem)
     flux_Et = F.relu(flux_Et)
-    
+
     # Final S2 update
     S2_new = S2_tmp - flux_Et
     S2_new = torch.clamp(S2_new, min=nearzero)
@@ -139,15 +142,15 @@ def simhyd_step(
     # --- 3. Groundwater Process (S3) ---
     # Inflow to S3: groundwater recharge (REC) and saturation overflow (GWF)
     inflow_S3 = flux_REC + flux_GWF
-    
+
     S3_tmp = S3 + inflow_S3
     S3_tmp = torch.clamp(S3_tmp, min=nearzero)
-    
+
     # flux_BAS: Baseflow from groundwater
     flux_BAS = baseflow_1(k, S3_tmp, nearzero=nearzero)
     flux_BAS = torch.minimum(flux_BAS, S3_tmp - nearzero)
     flux_BAS = F.relu(flux_BAS)
-    
+
     # Final S3 update
     S3_new = S3_tmp - flux_BAS
     S3_new = torch.clamp(S3_new, min=nearzero)

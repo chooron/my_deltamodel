@@ -11,12 +11,12 @@ from ..marrmot.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_12_alpine2_6p_2s)
 ALPINE2_PARAMS_BOUNDS = {
-    "tt": [-3.0, 5.0],        # Threshold temperature [Celsius]
-    "ddf": [0.0, 20.0],       # Degree-day-factor [mm/d/Celsius]
-    "Smax": [1.0, 2000.0],    # Maximum soil moisture storage [mm]
-    "Cfc": [0.05, 0.95],      # Field capacity as fraction of Smax [-]
-    "tcin": [0.0, 1.0],       # Interflow coefficient [d-1]
-    "tcbf": [0.0, 1.0],       # Baseflow coefficient [d-1]
+    "tt": [-3.0, 5.0],  # Threshold temperature [Celsius]
+    "ddf": [0.0, 20.0],  # Degree-day-factor [mm/d/Celsius]
+    "Smax": [1.0, 2000.0],  # Maximum soil moisture storage [mm]
+    "Cfc": [0.05, 0.95],  # Field capacity as fraction of Smax [-]
+    "tcin": [0.0, 1.0],  # Interflow coefficient [d-1]
+    "tcbf": [0.0, 1.0],  # Baseflow coefficient [d-1]
 }
 
 # Parameter description dictionary
@@ -61,11 +61,11 @@ def alpine2_step(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Alpine model v2 single-step calculation.
-    
+
     Model reference:
-    Eder, G., Sivapalan, M., & Nachtnebel, H. P. (2003). Modelling water 
-    balances in an Alpine catchment through exploitation of emergent 
-    properties over changing time scales. Hydrological Processes, 17(11), 
+    Eder, G., Sivapalan, M., & Nachtnebel, H. P. (2003). Modelling water
+    balances in an Alpine catchment through exploitation of emergent
+    properties over changing time scales. Hydrological Processes, 17(11),
     2125-2149.
     """
 
@@ -76,7 +76,7 @@ def alpine2_step(
     flux_pr = rainfall_1(P, T, tt, nearzero=nearzero)
     # Snowmelt calculation
     flux_qn = melt_1(ddf, tt, T, S1, nearzero=nearzero)
-    
+
     # Ensure melt doesn't exceed snow storage
     flux_qn = torch.minimum(flux_qn, S1 + flux_ps - nearzero)
     flux_qn = F.relu(flux_qn)
@@ -87,15 +87,16 @@ def alpine2_step(
 
     # 2. Soil moisture process (S2)
     # Fast-First, Sequential Update
-    
+
     # Inflow to soil store: rainfall + melt
     inflow_S2 = flux_pr + flux_qn
-    
+
     # Saturation excess calculation (Fast process)
     # Using inflow_S2 as driving potential for liquid runoff
     flux_qse = saturation_1(inflow_S2, S2, Smax, nearzero=nearzero)
-    flux_qse = torch.clamp(flux_qse, min=0.0, max=inflow_S2)
-    
+    zeros = torch.zeros_like(flux_qse)
+    flux_qse = torch.clamp(flux_qse, min=zeros, max=inflow_S2)
+
     # Update state after runoff for evaporation
     S2_tmp = S2 + inflow_S2 - flux_qse
     S2_tmp = torch.clamp(S2_tmp, min=nearzero)
@@ -106,22 +107,22 @@ def alpine2_step(
     flux_ea = torch.minimum(flux_ea, S2_tmp - nearzero)
     flux_ea = torch.minimum(flux_ea, PET)
     flux_ea = F.relu(flux_ea)
-    
+
     # Update state for slow processes (Interflow and Baseflow)
     S2_tmp2 = S2_tmp - flux_ea
     S2_tmp2 = torch.clamp(S2_tmp2, min=nearzero)
-    
+
     # Interflow calculation
     # interflow_8(S, p1, p2) where p2 is threshold Sfc * Smax
     sfc_threshold = Cfc * Smax
     flux_qin = interflow_8(S2_tmp2, tcin, sfc_threshold, nearzero=nearzero)
     flux_qin = torch.minimum(flux_qin, S2_tmp2 - nearzero)
     flux_qin = F.relu(flux_qin)
-    
+
     # S2 update before baseflow
     S2_tmp3 = S2_tmp2 - flux_qin
     S2_tmp3 = torch.clamp(S2_tmp3, min=nearzero)
-    
+
     # Baseflow calculation
     flux_qbf = baseflow_1(tcbf, S2_tmp3, nearzero=nearzero)
     flux_qbf = torch.minimum(flux_qbf, S2_tmp3 - nearzero)

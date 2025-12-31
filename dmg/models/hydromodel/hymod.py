@@ -8,11 +8,11 @@ from ..marrmot.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_29_hymod_5p_5s)
 HYMOD_PARAMS_BOUNDS = {
-    "smax": [1.0, 2000.0],    # Maximum soil moisture storage [mm]
-    "b_exp": [0.0, 10.0],     # Soil depth distribution parameter [-]
-    "a_split": [0.0, 1.0],    # Runoff distribution fraction [-]
-    "kf": [0.0, 1.0],         # Fast flow time parameter [d-1]
-    "ks": [0.0, 1.0],         # Base flow time parameter [d-1]
+    "smax": [1.0, 2000.0],  # Maximum soil moisture storage [mm]
+    "b_exp": [0.0, 10.0],  # Soil depth distribution parameter [-]
+    "a_split": [0.0, 1.0],  # Runoff distribution fraction [-]
+    "kf": [0.0, 1.0],  # Fast flow time parameter [d-1]
+    "ks": [0.0, 1.0],  # Base flow time parameter [d-1]
 }
 
 # Parameter description dictionary
@@ -27,7 +27,9 @@ HYMOD_PARAMS_DESC = {
 
 def create_initial_state(
     n_grid: int, nmul: int, device: torch.device, nearzero: float = 1e-6
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
     """
     Create initial states for HyMOD model.
     S1: Soil moisture store
@@ -61,13 +63,21 @@ def hymod_step(
     S4: torch.Tensor,
     S5: torch.Tensor,
     nearzero: float = 1e-6,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
     """
     HyMOD model single-step calculation.
-    
+
     Model reference:
-    Wagener, T., Boyle, D. P., Lees, M. J., Wheater, H. S., Gupta, Hoshin, 
-    V., & Sorooshian, S. (2001). A framework for development and application 
+    Wagener, T., Boyle, D. P., Lees, M. J., Wheater, H. S., Gupta, Hoshin,
+    V., & Sorooshian, S. (2001). A framework for development and application
     of hydrological models. Hydrology and Earth System Sciences, 5, 13-26.
     """
 
@@ -75,17 +85,18 @@ def hymod_step(
     # flux_pe: Saturation excess (Potential runoff)
     # saturation_2(S, Smax, b, P)
     flux_pe = saturation_2(S1, smax, b_exp, P, nearzero=nearzero)
-    flux_pe = torch.clamp(flux_pe, min=0.0, max=P)
-    
+    zeros = torch.zeros_like(flux_pe)
+    flux_pe = torch.clamp(flux_pe, min=zeros, max=P)
+
     # Update S1 for infiltration and excess
     S1_tmp = S1 + P - flux_pe
     S1_tmp = torch.clamp(S1_tmp, min=nearzero)
-    
+
     # flux_ea: Actual evaporation from soil
     flux_ea = evap_7(S1_tmp, smax, PET, nearzero=nearzero)
     flux_ea = torch.minimum(flux_ea, S1_tmp - nearzero)
     flux_ea = F.relu(flux_ea)
-    
+
     # Final S1 update
     S1_new = S1_tmp - flux_ea
     S1_new = torch.clamp(S1_new, min=nearzero)
@@ -102,14 +113,14 @@ def hymod_step(
     flux_qf1 = baseflow_1(kf, S2_tmp, nearzero=nearzero)
     flux_qf1 = torch.minimum(flux_qf1, S2_tmp - nearzero)
     S2_new = S2_tmp - flux_qf1
-    
+
     # Fast Tank 2 (S3)
     S3_tmp = S3 + flux_qf1
     S3_tmp = torch.clamp(S3_tmp, min=nearzero)
     flux_qf2 = baseflow_1(kf, S3_tmp, nearzero=nearzero)
     flux_qf2 = torch.minimum(flux_qf2, S3_tmp - nearzero)
     S3_new = S3_tmp - flux_qf2
-    
+
     # Fast Tank 3 (S4)
     S4_tmp = S4 + flux_qf2
     S4_tmp = torch.clamp(S4_tmp, min=nearzero)

@@ -13,18 +13,21 @@ from ..marrmot.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_35_mopex5_12p_5s)
 MOPEX5_PARAMS_BOUNDS = {
-    "tcrit": [-3.0, 3.0],      # Snowfall & snowmelt temperature [oC]
-    "ddf": [0.0, 20.0],       # Degree-day factor for snowmelt [mm/oC/d]
-    "s2max": [1.0, 2000.0],   # Maximum soil moisture storage [mm]
-    "tw": [0.0, 1.0],         # Groundwater leakage time [d-1]
-    "i_alpha": [0.0, 1.0],    # Intercepted fraction of Pr [-]
-    "i_s": [1.0, 365.0],      # Maximum Leaf Area Index timing [d]
-    "tmin": [-10.0, 0.0],     # Growing Season Index minimum temperature [oC]
-    "trange": [1.0, 20.0],    # Growing Season Index temperature range [oC]
-    "tu": [0.0, 1.0],         # Slow flow routing response time [d-1]
-    "se_frac": [0.05, 0.95],  # Root zone storage capacity as fraction of s3max [-]
-    "s3max": [1.0, 2000.0],   # Maximum root zone/groundwater storage [mm]
-    "tc": [0.0, 1.0],         # Mean residence time [d-1]
+    "tcrit": [-3.0, 3.0],  # Snowfall & snowmelt temperature [oC]
+    "ddf": [0.0, 20.0],  # Degree-day factor for snowmelt [mm/oC/d]
+    "s2max": [1.0, 2000.0],  # Maximum soil moisture storage [mm]
+    "tw": [0.0, 1.0],  # Groundwater leakage time [d-1]
+    "i_alpha": [0.0, 1.0],  # Intercepted fraction of Pr [-]
+    "i_s": [1.0, 365.0],  # Maximum Leaf Area Index timing [d]
+    "tmin": [-10.0, 0.0],  # Growing Season Index minimum temperature [oC]
+    "trange": [1.0, 20.0],  # Growing Season Index temperature range [oC]
+    "tu": [0.0, 1.0],  # Slow flow routing response time [d-1]
+    "se_frac": [
+        0.05,
+        0.95,
+    ],  # Root zone storage capacity as fraction of s3max [-]
+    "s3max": [1.0, 2000.0],  # Maximum root zone/groundwater storage [mm]
+    "tc": [0.0, 1.0],  # Mean residence time [d-1]
 }
 
 # Parameter description dictionary
@@ -46,7 +49,9 @@ MOPEX5_PARAMS_DESC = {
 
 def create_initial_state(
     n_grid: int, nmul: int, device: torch.device, nearzero: float = 1e-6
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
     """
     Create initial states for MOPEX-5 model.
     S1: Snow store
@@ -67,7 +72,7 @@ def mopex5_step(
     P: torch.Tensor,
     T: torch.Tensor,
     PET: torch.Tensor,
-    t_idx: torch.Tensor,
+    # t_idx: torch.Tensor, # TODO add t_idx
     # Parameters matching MOPEX5_PARAMS_BOUNDS keys
     tcrit: torch.Tensor,
     ddf: torch.Tensor,
@@ -88,20 +93,30 @@ def mopex5_step(
     S4: torch.Tensor,
     S5: torch.Tensor,
     nearzero: float = 1e-6,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
     """
     MOPEX-5 model single-step calculation.
-    
+
     Model reference:
-    Ye, S., Yaeger, M., Coopersmith, E., Cheng, L., & Sivapalan, M. (2012). 
-    Exploring the physical controls of regional patterns of flow duration 
-    curves - Part 2: Role of seasonality, the regime curve, and associated 
+    Ye, S., Yaeger, M., Coopersmith, E., Cheng, L., & Sivapalan, M. (2012).
+    Exploring the physical controls of regional patterns of flow duration
+    curves - Part 2: Role of seasonality, the regime curve, and associated
     process controls. Hydrology and Earth System Sciences, 16(11).
     """
 
     # --- 0. Auxiliary Parameters ---
-    tmax = torch.tensor(365.25, device=P.device) # Duration of seasonal cycle [d]
-    
+    tmax = torch.tensor(
+        365.25, device=P.device
+    )  # Duration of seasonal cycle [d]
+
     # flux_epc: phenology-corrected Potential Evapotranspiration
     # Uses temperature thresholding (Growing Season Index)
     flux_epc = phenology_1(T, tmin, tmin + trange, PET, nearzero=nearzero)
@@ -111,45 +126,49 @@ def mopex5_step(
     flux_ps = snowfall_1(P, T, tcrit, nearzero=nearzero)
     # flux_pr: rainfall
     flux_pr = rainfall_1(P, T, tcrit, nearzero=nearzero)
-    
+
     # flux_qn: snowmelt
     flux_qn = melt_1(ddf, tcrit, T, S1, nearzero=nearzero)
     flux_qn = torch.minimum(flux_qn, S1 - nearzero)
     flux_qn = F.relu(flux_qn)
-    
+
     # Final S1 update
     S1_new = S1 + flux_ps - flux_qn
     S1_new = torch.clamp(S1_new, min=nearzero)
 
     # --- 2. Surface Soil Moisture Process (S2) ---
     # Interception (i) logic
-    flux_i = interception_4(i_alpha, i_s, t_idx, tmax, flux_pr, nearzero=nearzero)
-    flux_i = torch.clamp(flux_i, min=0.0, max=flux_pr)
-    
+    t_idx = torch.ones_like(P)
+    flux_i = interception_4(
+        i_alpha, i_s, t_idx, tmax, flux_pr, nearzero=nearzero
+    )
+    zeros = torch.zeros_like(flux_i)
+    flux_i = torch.clamp(flux_i, min=zeros, max=flux_pr)
+
     # Inflow to S2: rainfall (net of interception) + snowmelt
     inflow_S2 = (flux_pr - flux_i) + flux_qn
-    
+
     # flux_q1f: Fast saturation excess runoff from S2
     flux_q1f = saturation_1(inflow_S2, S2, s2max, nearzero=nearzero)
-    flux_q1f = torch.clamp(flux_q1f, min=0.0, max=inflow_S2)
-    
+    flux_q1f = torch.clamp(flux_q1f, min=zeros, max=inflow_S2)
+
     # Update S2 for infiltration
     S2_tmp = S2 + inflow_S2 - flux_q1f
     S2_tmp = torch.clamp(S2_tmp, min=nearzero)
-    
+
     # flux_et1: Actual evaporation from S2 soil (using phenology-corrected PET)
     flux_et1 = evap_7(S2_tmp, s2max, flux_epc, nearzero=nearzero)
     flux_et1 = torch.minimum(flux_et1, S2_tmp - nearzero)
     flux_et1 = F.relu(flux_et1)
-    
+
     S2_tmp2 = S2_tmp - flux_et1
     S2_tmp2 = torch.clamp(S2_tmp2, min=nearzero)
-    
+
     # flux_qw: Groundwater leakage (Recharge to S3)
     flux_qw = recharge_3(tw, S2_tmp2, nearzero=nearzero)
     flux_qw = torch.minimum(flux_qw, S2_tmp2 - nearzero)
     flux_qw = F.relu(flux_qw)
-    
+
     # Final S2 update
     S2_new = S2_tmp2 - flux_qw
     S2_new = torch.clamp(S2_new, min=nearzero)
@@ -158,26 +177,26 @@ def mopex5_step(
     # Inflow is leakage from S2
     # flux_q2f: saturation excess overflow from S3 (to S4)
     flux_q2f = saturation_1(flux_qw, S3, s3max, nearzero=nearzero)
-    flux_q2f = torch.clamp(flux_q2f, min=0.0, max=flux_qw)
-    
+    flux_q2f = torch.clamp(flux_q2f, min=zeros, max=flux_qw)
+
     # Update S3 for evaporation
     S3_tmp = S3 + flux_qw - flux_q2f
     S3_tmp = torch.clamp(S3_tmp, min=nearzero)
-    
+
     # flux_et2: Actual evaporation from S3 (Root Zone)
     # Using corrected PET and fraction-based capacity se_frac * s3max
     flux_et2 = evap_7(S3_tmp, se_frac * s3max, flux_epc, nearzero=nearzero)
     flux_et2 = torch.minimum(flux_et2, S3_tmp - nearzero)
     flux_et2 = F.relu(flux_et2)
-    
+
     S3_tmp2 = S3_tmp - flux_et2
     S3_tmp2 = torch.clamp(S3_tmp2, min=nearzero)
-    
+
     # flux_q2u: Slow flow routing response time (to S5)
     flux_q2u = baseflow_1(tu, S3_tmp2, nearzero=nearzero)
     flux_q2u = torch.minimum(flux_q2u, S3_tmp2 - nearzero)
     flux_q2u = F.relu(flux_q2u)
-    
+
     # Final S3 update
     S3_new = S3_tmp2 - flux_q2u
     S3_new = torch.clamp(S3_new, min=nearzero)
@@ -187,12 +206,12 @@ def mopex5_step(
     inflow_S4 = flux_q1f + flux_q2f
     S4_tmp = S4 + inflow_S4
     S4_tmp = torch.clamp(S4_tmp, min=nearzero)
-    
+
     # flux_qf: Fast discharge
     flux_qf = baseflow_1(tc, S4_tmp, nearzero=nearzero)
     flux_qf = torch.minimum(flux_qf, S4_tmp - nearzero)
     flux_qf = F.relu(flux_qf)
-    
+
     # Final S4 update
     S4_new = S4_tmp - flux_qf
     S4_new = torch.clamp(S4_new, min=nearzero)
@@ -201,12 +220,12 @@ def mopex5_step(
     # Inflow is subsurface flow q2u
     S5_tmp = S5 + flux_q2u
     S5_tmp = torch.clamp(S5_tmp, min=nearzero)
-    
+
     # flux_qs: Slow discharge
     flux_qs = baseflow_1(tc, S5_tmp, nearzero=nearzero)
     flux_qs = torch.minimum(flux_qs, S5_tmp - nearzero)
     flux_qs = F.relu(flux_qs)
-    
+
     # Final S5 update
     S5_new = S5_tmp - flux_qs
     S5_new = torch.clamp(S5_new, min=nearzero)

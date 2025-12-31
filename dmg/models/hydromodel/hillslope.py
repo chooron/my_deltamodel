@@ -10,13 +10,13 @@ from ..marrmot.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_13_hillslope_7p_2s)
 HILLSLOPE_PARAMS_BOUNDS = {
-    "dw": [0.0, 5.0],        # Interception capacity [mm]
-    "betaw": [0.0, 10.0],    # Soil moisture distribution parameter [-]
+    "dw": [0.0, 5.0],  # Interception capacity [mm]
+    "betaw": [0.0, 10.0],  # Soil moisture distribution parameter [-]
     "swmax": [1.0, 2000.0],  # Maximum soil moisture depth [mm]
-    "a": [0.0, 1.0],         # Surface/groundwater split fraction [-]
-    "th": [1.0, 120.0],      # Routing delay [d]
-    "c_rad": [0.0, 4.0],     # Rate of capillary rise [mm/d]
-    "kh": [0.0, 1.0],        # Groundwater runoff coefficient [d-1]
+    "a": [0.0, 1.0],  # Surface/groundwater split fraction [-]
+    "th": [1.0, 120.0],  # Routing delay [d]
+    "c_rad": [0.0, 4.0],  # Rate of capillary rise [mm/d]
+    "kh": [0.0, 1.0],  # Groundwater runoff coefficient [d-1]
 }
 
 # Parameter description dictionary
@@ -63,9 +63,9 @@ def hillslope_step(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Hillslope model (FLEX-Topo) single-step calculation.
-    
+
     Model reference:
-    Savenije, H. H. G. (2010). Topography driven conceptual modelling 
+    Savenije, H. H. G. (2010). Topography driven conceptual modelling
     (FLEX-Topo). Hydrology and Earth System Sciences, 14(12), 2681-2692.
     """
 
@@ -78,7 +78,8 @@ def hillslope_step(
     # 2. Fast Process (Saturation Excess)
     # flux_qse: saturation excess calculation
     flux_qse = saturation_2(S1, swmax, betaw, flux_pe, nearzero=nearzero)
-    flux_qse = torch.clamp(flux_qse, min=0.0, max=flux_pe)
+    zeros = torch.zeros_like(flux_qse)
+    flux_qse = torch.clamp(flux_qse, min=zeros, max=flux_pe)
 
     # 3. Flow splitting
     # Split qse into surface (qses) and groundwater (qseg) branches
@@ -89,7 +90,7 @@ def hillslope_step(
     # S1 interim update
     S1_tmp = S1 + flux_pe - flux_qse
     S1_tmp = torch.clamp(S1_tmp, min=nearzero)
-    
+
     # S2 interim update
     S2_tmp = S2 + flux_qseg
     S2_tmp = torch.clamp(S2_tmp, min=nearzero)
@@ -100,22 +101,22 @@ def hillslope_step(
     flux_ea = torch.minimum(flux_ea, S1_tmp - nearzero)
     flux_ea = torch.minimum(flux_ea, PET)
     flux_ea = F.relu(flux_ea)
-    
+
     S1_tmp2 = S1_tmp - flux_ea
     S1_tmp2 = torch.clamp(S1_tmp2, min=nearzero)
 
     # 6. Slow Processes (Capillary Rise and Baseflow)
-    
+
     # flux_c: capillary rise from S2 to S1
     # capillary_2(p1=c_rad, S2, nearzero)
     flux_c = capillary_2(c_rad, S2_tmp, nearzero=nearzero)
     flux_c = torch.minimum(flux_c, S2_tmp - nearzero)
     flux_c = F.relu(flux_c)
-    
+
     # S2 update for baseflow
     S2_tmp2 = S2_tmp - flux_c
     S2_tmp2 = torch.clamp(S2_tmp2, min=nearzero)
-    
+
     # flux_qhgw: baseflow from S2
     flux_qhgw = baseflow_1(kh, S2_tmp2, nearzero=nearzero)
     flux_qhgw = torch.minimum(flux_qhgw, S2_tmp2 - nearzero)
@@ -124,7 +125,7 @@ def hillslope_step(
     # 7. Final State Updates Mass Balance
     S1_new = S1_tmp2 + flux_c
     S1_new = torch.clamp(S1_new, min=nearzero)
-    
+
     S2_new = S2_tmp2 - flux_qhgw
     S2_new = torch.clamp(S2_new, min=nearzero)
 

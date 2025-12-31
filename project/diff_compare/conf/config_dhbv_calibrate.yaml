@@ -50,16 +50,16 @@ simulation:
 
 ## Loss Function -------------------------#
 loss_function:
-  model: KgeBatchLoss
+  model: KgeLoss
 
 ## Differentiable Model -----------------------------#
 delta_model:
   rho: 365
 
   phy_model:
-    model: [Unify]
+    model: [UnifyV2]
     model_name: xinanjiang
-    nmul: 1
+    nmul: 16
     warm_up: 365
     warm_up_states: False
     dy_drop: 0.0
@@ -69,7 +69,7 @@ delta_model:
     forcings: [prcp, tmean, pet]
 
   nn_model:
-    model: AnnModel
+    model: Calibrate
     dr: 0.0
     hidden_size: 64
     batch_size: 100
