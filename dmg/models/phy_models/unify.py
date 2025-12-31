@@ -131,40 +131,9 @@ class Unify(nn.Module):
             for i, name in enumerate(names)
         }
 
-    def _descale_dynamic_params(
-        self, params: torch.Tensor, names: List[str]
-    ) -> Dict[str, torch.Tensor]:
-        """Dynamic parameter descaling with dropout-like expansion"""
-        n_steps, n_grid = params.shape[:2]
-        pmat = torch.ones([1, n_grid, 1], device=self.device)
-
-        result = {}
-        for i, name in enumerate(names):
-            # Take the last time step as static reference
-            static_par = (
-                params[-1, :, i, :].unsqueeze(0).expand(n_steps, -1, -1)
-            )
-            dynamic_par = params[:, :, i, :]
-            # Bernoulli mask for mixing static and dynamic (legacy behavior)
-            mask = torch.bernoulli(pmat).detach_()
-            combined = dynamic_par * (1 - mask) + static_par * mask
-            result[name] = change_param_range(
-                combined, self.parameter_bounds[name]
-            )
-        return result
-
-    def _descale_routing_params(self, params: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Routing parameter descaling"""
-        return {
-            name: change_param_range(
-                params[:, i], self.routing_parameter_bounds[name]
-            )
-            for i, name in enumerate(self.routing_param_names)
-        }
-
     def unpack_parameters(
         self, parameters: Tuple[Optional[torch.Tensor], torch.Tensor]
-    ) -> Tuple[Optional[torch.Tensor], torch.Tensor, torch.Tensor]:
+    ) -> Tuple[Optional[torch.Tensor], torch.Tensor]:
         """Unpack raw parameters from NN output"""
         dy_count = len(self.dynamic_params)
         static_count = len(self.phy_param_names) - dy_count
@@ -183,10 +152,7 @@ class Unify(nn.Module):
             raw_phy_static.shape[0], static_count, self.nmul
         )
 
-        # Routing params: (B, routing_count)
-        phy_route = raw_phy_static[:, static_count * self.nmul :]
-
-        return phy_dy, phy_static, phy_route
+        return phy_dy, phy_static
 
     def forward(
         self,
@@ -200,8 +166,7 @@ class Unify(nn.Module):
             self.pred_cutoff = self.warm_up
 
         # Unpack and descale parameters
-        phy_dy, phy_static, phy_route = self.unpack_parameters(parameters)
-        self.routing_param_dict = self._descale_routing_params(phy_route)
+        phy_dy, phy_static = self.unpack_parameters(parameters)
 
         n_grid = x.size(1)
 
@@ -214,11 +179,6 @@ class Unify(nn.Module):
         ]
         
         phy_dy_dict = {}
-        if phy_dy is not None:
-            phy_dy_dict = self._descale_dynamic_params(
-                phy_dy, self.dynamic_params
-            )
-        
         phy_static_dict = self._descale_params(
             phy_static, static_names, self.parameter_bounds
         )

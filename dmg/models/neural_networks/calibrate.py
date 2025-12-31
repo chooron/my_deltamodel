@@ -25,7 +25,7 @@ class Calibrate(torch.nn.Module):
         return cls(
             nx=config["nx2"],
             ny=config["ny"],
-            num_basins=config["batch_size"],
+            num_basins=559, # todo 当流域总数改变时这个需要改变
             num_start=config["nmul"],
             device=device,
         )
@@ -33,4 +33,6 @@ class Calibrate(torch.nn.Module):
     def forward(
         self, x: dict[str, torch.Tensor]
     ) -> tuple[Union[None, torch.Tensor], torch.Tensor]:
-        return None, F.sigmoid(self.params)
+        batch_indices = x['batch_sample']
+        cur_params = self.params[batch_indices]
+        return None, F.sigmoid(cur_params)

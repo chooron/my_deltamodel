@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 #     log.warning('Ray Tune is not installed or is misconfigured. Tuning will be disabled.')
 
 
-class Trainer(BaseTrainer):
+class CalTrainer(BaseTrainer):
     """Generic, unified trainer for neural networks and differentiable models.
 
     Inspired by the Hugging Face Trainer class.
@@ -277,9 +277,6 @@ class Trainer(BaseTrainer):
         # 获取 Multi-Start 倍数 (默认为1)
         nmul = self.config["delta_model"]["phy_model"].get("nmul", 16)
 
-        # 获取 Target 变量名 (跟 evaluate 保持一致)
-        target_name = self.config["train"]["target"][0]
-
         # Iterate through epoch in minibatches.
         for mb in tqdm.tqdm(
             range(1, n_minibatch + 1),
@@ -302,9 +299,9 @@ class Trainer(BaseTrainer):
                 # 简单粗暴：直接取出来，复制，放回去
                 # 假设 dataset_sample[target_name] 维度是 [Batch, Time, 1]
                 # dim=0 是 Batch 维度，我们将其扩展为 Batch * nmul
-                dataset_sample[target_name] = dataset_sample[
-                    target_name
-                ].repeat_interleave(nmul, dim=0)
+                dataset_sample["target"] = dataset_sample[
+                    "target"
+                ].repeat_interleave(nmul, dim=1)
             # ============================================================
 
             # Forward pass through model.
@@ -359,27 +356,43 @@ class Trainer(BaseTrainer):
         """Run model evaluation and return both metrics and model outputs."""
         self.is_in_train = False
 
+        # 1. 获取 Multi-Start 的倍数 (从配置读取, 默认为 1)
+        nmul = self.config['delta_model']['phy_model'].get('num_start', 1)
+
         # Track overall predictions and observations
         batch_predictions = []
-        observations = self.eval_dataset["target"]
+        observations = self.eval_dataset['target']
+
+        # ============================================================
+        # [核心修改] 如果是 Multi-Start，把观测数据也复制扩展，跟预测数据对齐
+        # observations shape: [Batch, Time, 1] -> [Batch*nmul, Time, 1]
+        # ============================================================
+        if nmul > 1:
+            # 假设 dim=0 是 Batch 维度 (根据你之前的代码逻辑)
+            # 如果报错维度不对，请检查 observations 的 shape，可能是 dim=1
+            observations = observations.repeat_interleave(nmul, dim=1)
+        # ============================================================
 
         # Get start and end indices for each batch
-        n_samples = self.eval_dataset["xc_nn_norm"].shape[1]
-        batch_start = np.arange(0, n_samples, self.config["test"]["batch_size"])
+        n_samples = self.eval_dataset['xc_nn_norm'].shape[1]
+        batch_start = np.arange(0, n_samples, self.config['test']['batch_size'])
         batch_end = np.append(batch_start[1:], n_samples)
 
         # Model forward
+        # _forward_loop 内部已经在 _run_model 里做了扩展，
+        # 所以出来的 batch_predictions 已经是 [Batch*nmul, Time] 的形状了
         log.info(f"Validating Model: Forwarding {len(batch_start)} batches")
-        batch_predictions = self._forward_loop(
-            self.eval_dataset, batch_start, batch_end
-        )
+        batch_predictions = self._forward_loop(self.eval_dataset, batch_start, batch_end)
 
         # Save predictions and calculate metrics
+        # 现在的 observations 和 batch_predictions 长度都是 N*16，完全匹配，直接保存即可
         log.info("Saving model outputs + Calculating metrics")
         save_outputs(self.config, batch_predictions, observations)
         self.predictions = self._batch_data(batch_predictions)
 
         # Calculate metrics
+        # 这会算出 1600 个 KGE，保存到 metrics.csv 里。
+        # 你不用管它，后面写脚本自己挑就行。
         self.calc_metrics(batch_predictions, observations)
 
     def inference(self) -> None:

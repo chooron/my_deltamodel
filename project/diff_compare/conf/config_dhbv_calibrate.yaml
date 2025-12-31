@@ -11,7 +11,7 @@ gpu_id: 0
 
 data_loader: HydroLoader
 data_sampler: HydroSampler
-trainer: Trainer
+trainer: CalTrainer
 
 save_path: project/diff_compare/output
 trained_model: project/diff_compare/output/model/
