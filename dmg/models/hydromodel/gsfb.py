@@ -1,11 +1,12 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.evap import evap_20
-from ..marrmot.saturation import saturation_1
-from ..marrmot.interflow import interflow_11
-from ..marrmot.baseflow import baseflow_1, baseflow_9
-from ..marrmot.recharge import recharge_5
+from .flux.evap import evap_20
+from .flux.saturation import saturation_1
+from .flux.interflow import interflow_11
+from .flux.baseflow import baseflow_1, baseflow_9
+from .flux.recharge import recharge_5
+
 
 # Parameter range dictionary (based on MARRMoT m_20_gsfb_8p_3s)
 GSFB_PARAMS_BOUNDS = {

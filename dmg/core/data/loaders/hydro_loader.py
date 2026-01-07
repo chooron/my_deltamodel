@@ -148,7 +148,9 @@ class HydroLoader(BaseLoader):
         dict[str, torch.Tensor]
             Dictionary of data tensors for running models.
         """
-        x_phy, c_phy, x_nn, c_nn, target = self.read_data(scope)
+        x_phy, c_phy, x_nn, c_nn, select_time_doy, target = self.read_data(
+            scope
+        )
 
         # Normalize nn input data
         self.load_norm_stats(x_nn, c_nn, target)
@@ -163,11 +165,14 @@ class HydroLoader(BaseLoader):
             "x_nn_norm": self.to_tensor(x_nn_norm),
             "xc_nn_norm": self.to_tensor(xc_nn_norm),
             "c_nn_norm": self.to_tensor(c_nn_norm),
+            "doy": self.to_tensor(select_time_doy).expand(x_phy.shape[0], -1, -1),
             "target": self.to_tensor(target),
         }
         return dataset
 
-    def read_data(self, scope: Optional[str]) -> tuple[NDArray[np.float32]]:
+    def read_data(
+        self, scope: Optional[str]
+    ) -> tuple[NDArray[np.float32], ...]:
         """Read data from the data file.
 
         Parameters
@@ -183,7 +188,9 @@ class HydroLoader(BaseLoader):
         try:
             # if self.config['observations']['data_path']:
             #     data_path = self.config['observations']['data_path']
-            data_path = os.path.join(os.getenv("DATA_PATH"), "camels_dataset")
+            data_path = os.path.join(
+                os.getenv("DATA_PATH", ""), "camels_dataset"
+            )
 
             if scope == "train":
                 if not data_path:
@@ -218,8 +225,10 @@ class HydroLoader(BaseLoader):
             self.config["all_time"][-1],
             freq="d",
         )
+        time_doy = all_time.dayofyear.values
         idx_start = all_time.get_loc(time[0])
         idx_end = all_time.get_loc(time[-1]) + 1
+        select_time_doy = time_doy[np.newaxis, idx_start:idx_end, np.newaxis]
 
         # Load data
         with open(data_path, "rb") as f:
@@ -307,7 +316,7 @@ class HydroLoader(BaseLoader):
         # Convert flow to mm/day if necessary
         target = self._flow_conversion(c_nn, target)
 
-        return x_phy, c_phy, x_nn, c_nn, target
+        return x_phy, c_phy, x_nn, c_nn, select_time_doy, target
 
     def _flow_conversion(
         self,

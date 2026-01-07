@@ -15,6 +15,14 @@ Author: chooron
 import torch
 from typing import Optional
 
+
+MODEL_STATES_NUM = {
+    'HBV': 5,
+    'SHM': 5,
+    'EXPHYDRO': 2,
+    'HYMOD': 5,
+}
+
 HBV_PARAMS_BOUNDS = {
     "parTT": [-2.5, 2.5],
     "parCFMAX": [0.5, 10],
@@ -90,25 +98,11 @@ def hbv_timestep_loop(
     SUZ: Optional[torch.Tensor] = None,
     SLZ: Optional[torch.Tensor] = None,
 ) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor,
 ]:
     """
     HBV 模型时间步循环（JIT 优化版本）
@@ -128,8 +122,13 @@ def hbv_timestep_loop(
     Returns
     -------
     tuple
-        包含以下输出（均为形状 (T, B, E)）:
+        包含以下输出 (T, B, E):
         - Qsim_out: 总产流
+        - SWE_out: 雪水当量
+        - SM_out: 土壤含水量
+        - SUZ_out: 上层地下水
+        - SLZ_out: 下层地下水
+        - MELTWATER_out: 融雪水
         - Q0_out: 快速壤中流
         - Q1_out: 慢速壤中流
         - Q2_out: 地下水出流
@@ -139,17 +138,10 @@ def hbv_timestep_loop(
         - evapfactor_out: 蒸发系数
         - tosoil_out: 入渗量
         - PERC_out: 下渗量
-        - SWE_out: 雪水当量
-        - SM_out: 土壤含水量
         - capillary_out: 毛管上升量
         - soil_wetness_out: 土壤湿度
-
-        以及最终状态（均为形状 (B, E)）:
-        - SNOWPACK: 积雪
-        - MELTWATER: 融雪水
-        - SM: 土壤水
-        - SUZ: 上层地下水
-        - SLZ: 下层地下水
+        最终状态 (B, E):
+        - SNOWPACK, MELTWATER, SM, SUZ, SLZ
     """
     n_steps = P.shape[0]
     n_grid = P.shape[1]
@@ -176,6 +168,11 @@ def hbv_timestep_loop(
     Qsim_out = torch.zeros(
         (n_steps, n_grid, nmul), dtype=torch.float32, device=device
     ) + nearzero
+    SWE_out = torch.zeros_like(Qsim_out) + nearzero
+    SM_out = torch.zeros_like(Qsim_out) + nearzero
+    SUZ_out = torch.zeros_like(Qsim_out) + nearzero
+    SLZ_out = torch.zeros_like(Qsim_out) + nearzero
+    MELTWATER_out = torch.zeros_like(Qsim_out) + nearzero
     Q0_out = torch.zeros_like(Qsim_out) + nearzero
     Q1_out = torch.zeros_like(Qsim_out) + nearzero
     Q2_out = torch.zeros_like(Qsim_out) + nearzero
@@ -185,8 +182,6 @@ def hbv_timestep_loop(
     evapfactor_out = torch.zeros_like(Qsim_out) + nearzero
     tosoil_out = torch.zeros_like(Qsim_out) + nearzero
     PERC_out = torch.zeros_like(Qsim_out) + nearzero
-    SWE_out = torch.zeros_like(Qsim_out) + nearzero
-    SM_out = torch.zeros_like(Qsim_out) + nearzero
     capillary_out = torch.zeros_like(Qsim_out) + nearzero
     soil_wetness_out = torch.zeros_like(Qsim_out) + nearzero
 
@@ -277,12 +272,15 @@ def hbv_timestep_loop(
 
         # 记录输出
         Qsim_out[t] = Q0 + Q1 + Q2
+        SWE_out[t] = SNOWPACK
+        SM_out[t] = SM
+        SUZ_out[t] = SUZ
+        SLZ_out[t] = SLZ
+        MELTWATER_out[t] = MELTWATER
         Q0_out[t] = Q0
         Q1_out[t] = Q1
         Q2_out[t] = Q2
         AET_out[t] = ETact
-        SWE_out[t] = SNOWPACK
-        SM_out[t] = SM
         capillary_out[t] = capillary
         recharge_out[t] = recharge
         excs_out[t] = excess
@@ -293,6 +291,11 @@ def hbv_timestep_loop(
 
     return (
         Qsim_out,
+        SWE_out,
+        SM_out,
+        SUZ_out,
+        SLZ_out,
+        MELTWATER_out,
         Q0_out,
         Q1_out,
         Q2_out,
@@ -302,8 +305,6 @@ def hbv_timestep_loop(
         evapfactor_out,
         tosoil_out,
         PERC_out,
-        SWE_out,
-        SM_out,
         capillary_out,
         soil_wetness_out,
         SNOWPACK,
@@ -386,19 +387,19 @@ def shm_timestep_loop(
     Returns
     -------
     tuple
-        包含以下输出:
-        - Qsim_out: 总流量 (T, B, E)
-        - Qf_out: 快速流 (T, B, E)
-        - Qi_out: 壤中流 (T, B, E)
-        - Qb_out: 基流 (T, B, E)
-        - AET_out: 实际蒸发 (T, B, E)
-        - ss_out: 积雪状态 (T, B, E)
-        - sf_out: 快速流蓄水状态 (T, B, E)
-        - su_out: 非饱和带状态 (T, B, E)
-        - si_out: 壤中流蓄水状态 (T, B, E)
-        - sb_out: 基流蓄水状态 (T, B, E)
-        以及最终状态:
-        - ss, sf, su, si, sb: (B, E)
+        包含以下输出 (T, B, E):
+        - Qsim_out: 总流量
+        - ss_out: 积雪状态
+        - su_out: 非饱和带状态
+        - sf_out: 快速流蓄水状态
+        - si_out: 壤中流蓄水状态
+        - sb_out: 基流蓄水状态
+        - Qf_out: 快速流
+        - Qi_out: 壤中流
+        - Qb_out: 基流
+        - AET_out: 实际蒸发
+        最终状态 (B, E):
+        - ss, sf, su, si, sb
     """
     n_steps = P.shape[0]
     n_grid = P.shape[1]
@@ -528,15 +529,15 @@ def shm_timestep_loop(
 
     return (
         Qsim_out,
+        ss_out,
+        su_out,
+        sf_out,
+        si_out,
+        sb_out,
         Qf_out,
         Qi_out,
         Qb_out,
         AET_out,
-        ss_out,
-        sf_out,
-        su_out,
-        si_out,
-        sb_out,
         ss,
         sf,
         su,
@@ -560,10 +561,23 @@ def exphydro_timestep_loop(
     soil_storage: Optional[torch.Tensor] = None,
     snow_storage: Optional[torch.Tensor] = None,
 ) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
 ]:
     """
     数值稳定的 EXP-HYDRO 实现
+
+    Returns
+    -------
+    tuple
+        包含以下输出 (T, B, E):
+        - qsim_out: 总流量
+        - snow_storage_out: 积雪状态
+        - soil_storage_out: 土壤储水
+        - et_out: 实际蒸发
+        - melt_out: 融雪量
+        最终状态 (B, E):
+        - snow_storage: 积雪
+        - soil_storage: 土壤储水
     """
     n_steps = P.shape[0]
     n_grid = P.shape[1]
@@ -578,6 +592,8 @@ def exphydro_timestep_loop(
 
     # 预分配输出
     qsim_out = torch.zeros((n_steps, n_grid, nmul), dtype=torch.float32, device=device) + nearzero
+    snow_storage_out = torch.zeros_like(qsim_out) + nearzero
+    soil_storage_out = torch.zeros_like(qsim_out) + nearzero
     et_out = torch.zeros_like(qsim_out) + nearzero
     melt_out = torch.zeros_like(qsim_out) + nearzero
     zero = torch.tensor(0.0, dtype=torch.float32, device=device)
@@ -679,10 +695,12 @@ def exphydro_timestep_loop(
 
         # 记录输出
         qsim_out[t] = qsub + qsurf
+        snow_storage_out[t] = snow_storage
+        soil_storage_out[t] = soil_storage
         et_out[t] = et
         melt_out[t] = melt
 
-    return qsim_out, et_out, melt_out, snow_storage, soil_storage
+    return qsim_out, snow_storage_out, soil_storage_out, et_out, melt_out, snow_storage, soil_storage
 
 
 # @torch.jit.script
@@ -706,9 +724,38 @@ def hymod_timestep_loop(
     XCuz: Optional[torch.Tensor] = None,
     Xs: Optional[torch.Tensor] = None,
     Xq: Optional[torch.Tensor] = None,
-):
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    torch.Tensor
+]:
     """
     数值稳定的 HyMod 实现
+
+    Returns
+    -------
+    tuple
+        包含以下输出 (T, B, E):
+        - Q_out: 总流量
+        - snow_store_out: 积雪状态
+        - XHuz_out: 土壤储水 (深度)
+        - XCuz_out: 土壤储水 (容量)
+        - Xs_out: 慢流蓄水
+        - Xq_out: 快流蓄水
+        - snow_in_out: 降雪量
+        - melt_out: 融雪量
+        - effPrecip_out: 有效降水
+        - PE_out: 潜在蒸发
+        - OV_out: 总超渗
+        - AE_out: 实际蒸发
+        - OV1_out: 入渗超渗
+        - OV2_out: 饱和超渗
+        - Qq_out: 快流
+        - Qs_out: 慢流
+        最终状态 (B, E):
+        - snow_store, XHuz, XCuz, Xs, Xq
     """
     n_steps = P.shape[0]
     n_grid = P.shape[1]
@@ -728,18 +775,23 @@ def hymod_timestep_loop(
         Xq = torch.zeros((n_grid, nmul), dtype=torch.float32, device=device) + nearzero
 
     # 2. 预分配输出
-    # ... (保持原样)
-    snow_out = torch.zeros_like(P)
-    melt_out = torch.zeros_like(P)
-    effPrecip_out = torch.zeros_like(P)
-    PE_out = torch.zeros_like(P)
-    OV_out = torch.zeros_like(P)
-    AE_out = torch.zeros_like(P)
-    OV1_out = torch.zeros_like(P)
-    OV2_out = torch.zeros_like(P)
-    Qq_out = torch.zeros_like(P)
-    Qs_out = torch.zeros_like(P)
-    Q_out = torch.zeros_like(P)
+    Q_out = torch.zeros((n_steps, n_grid, nmul), dtype=torch.float32, device=device) + nearzero
+    snow_store_out = torch.zeros_like(Q_out) + nearzero
+    XHuz_out = torch.zeros_like(Q_out) + nearzero
+    XCuz_out = torch.zeros_like(Q_out) + nearzero
+    Xs_out = torch.zeros_like(Q_out) + nearzero
+    Xq_out = torch.zeros_like(Q_out) + nearzero
+    
+    snow_in_out = torch.zeros_like(Q_out) + nearzero
+    melt_out = torch.zeros_like(Q_out) + nearzero
+    effPrecip_out = torch.zeros_like(Q_out) + nearzero
+    PE_out = torch.zeros_like(Q_out) + nearzero
+    OV_out = torch.zeros_like(Q_out) + nearzero
+    AE_out = torch.zeros_like(Q_out) + nearzero
+    OV1_out = torch.zeros_like(Q_out) + nearzero
+    OV2_out = torch.zeros_like(Q_out) + nearzero
+    Qq_out = torch.zeros_like(Q_out) + nearzero
+    Qs_out = torch.zeros_like(Q_out) + nearzero
 
     zero = torch.tensor(0.0, dtype=torch.float32, device=device)
     one = torch.tensor(1.0, dtype=torch.float32, device=device)
@@ -832,6 +884,7 @@ def hymod_timestep_loop(
         
         exponent = one / (one + B)
         XHuz = safe_Huz * (one - torch.pow(base_inv, exponent))
+        XCuz = XCuz_new  # 更新状态用于返回值
 
         # --- Routing Module ---
         
@@ -880,7 +933,14 @@ def hymod_timestep_loop(
         Q = Qq + Qs
 
         # Record
-        snow_out[t] = snow_in
+        Q_out[t] = Q
+        snow_store_out[t] = snow_store
+        XHuz_out[t] = XHuz
+        XCuz_out[t] = XCuz_new # 这里记录 XCuz_new
+        Xs_out[t] = Xs
+        Xq_out[t] = Xq
+        
+        snow_in_out[t] = snow_in
         melt_out[t] = melt
         effPrecip_out[t] = Qout
         PE_out[t] = PET[t]
@@ -890,10 +950,10 @@ def hymod_timestep_loop(
         OV2_out[t] = OV2
         Qq_out[t] = Qq
         Qs_out[t] = Qs
-        Q_out[t] = Q
 
     return (
-        Q_out, snow_out, melt_out, effPrecip_out, PE_out,
-        OV_out, AE_out, OV1_out, OV2_out, Qq_out, Qs_out,
+        Q_out, snow_store_out, XHuz_out, XCuz_out, Xs_out, Xq_out,
+        snow_in_out, melt_out, effPrecip_out, PE_out, OV_out,
+        AE_out, OV1_out, OV2_out, Qq_out, Qs_out,
         snow_store, XHuz, XCuz, Xs, Xq,
     )

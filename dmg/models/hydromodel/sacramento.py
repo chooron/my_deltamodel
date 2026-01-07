@@ -1,13 +1,13 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.split import split_1
-from ..marrmot.evap import evap_1, evap_7
-from ..marrmot.saturation import saturation_1
-from ..marrmot.interflow import interflow_5
-from ..marrmot.percolation import percolation_4
-from ..marrmot.soilmoisture import soilmoisture_1, soilmoisture_2
-from ..marrmot.baseflow import baseflow_1
+from .flux.split import split_1
+from .flux.evap import evap_1, evap_7
+from .flux.saturation import saturation_1
+from .flux.interflow import interflow_5
+from .flux.percolation import percolation_4
+from .flux.soilmoisture import soilmoisture_1, soilmoisture_2
+from .flux.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_33_sacramento_11p_5s)
 SACRAMENTO_PARAMS_BOUNDS = {

@@ -17,8 +17,8 @@ def smooth_threshold_storage_logistic(
         k: Smoothing steepness
         nearzero: Numerical stability constant
     """
-    # scale factor ensures k is relative to magnitude
-    scale = k / (torch.abs(threshold) + nearzero)
+    thresh_abs = torch.abs(threshold) + nearzero
+    scale = torch.clamp(k / thresh_abs, max=50.0)
     return torch.sigmoid(scale * (S - threshold))
 
 

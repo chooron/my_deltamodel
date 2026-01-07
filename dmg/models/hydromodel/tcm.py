@@ -1,11 +1,11 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.effective import effective_1
-from ..marrmot.split import split_1
-from ..marrmot.evap import evap_1, evap_16
-from ..marrmot.saturation import saturation_1, saturation_9
-from ..marrmot.baseflow import baseflow_1, baseflow_6
+from .flux.effective import effective_1
+from .flux.split import split_1
+from .flux.evap import evap_1, evap_16
+from .flux.saturation import saturation_1, saturation_9
+from .flux.baseflow import baseflow_1, baseflow_6
 
 # Parameter range dictionary (based on MARRMoT m_25_tcm_6p_4s)
 TCM_PARAMS_BOUNDS = {
@@ -44,141 +44,131 @@ def create_initial_state(
     S4 = torch.zeros((n_grid, nmul), device=device) + nearzero
     return S1, S2, S3, S4
 
-
 def tcm_step(
     P: torch.Tensor,
     T: torch.Tensor,
     PET: torch.Tensor,
     # Parameters matching TCM_PARAMS_BOUNDS keys
-    phi: torch.Tensor,
-    rc: torch.Tensor,
-    gam: torch.Tensor,
-    k1: torch.Tensor,
-    ca: torch.Tensor,
-    k2: torch.Tensor,
+    phi: torch.Tensor, # Fraction preferential recharge [-]
+    rc: torch.Tensor,  # Maximum soil moisture depth (Applied to S1) [mm]
+    gam: torch.Tensor, # Fraction of Ep reduction with depth [-]
+    k1: torch.Tensor,  # Runoff coefficient [d-1]
+    ca: torch.Tensor,  # Abstraction rate [mm/d]
+    k2: torch.Tensor,  # Runoff coefficient [mm-1 d-1]
     # State variables
-    S1: torch.Tensor,
-    S2: torch.Tensor,
-    S3: torch.Tensor,
-    S4: torch.Tensor,
+    S1: torch.Tensor,  # Upper soil moisture store
+    S2: torch.Tensor,  # Soil moisture deficit store (0 = fully saturated)
+    S3: torch.Tensor,  # Fast routing reservoir
+    S4: torch.Tensor,  # Slow routing reservoir
     nearzero: float = 1e-6,
-) -> Tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Thames Catchment Model (TCM) single-step calculation.
-
-    Model reference:
-    Moore, R. J., & Bell, V. A. (2001). Comparison of rainfall-runoff models
-    for flood forecasting. Part 1: Literature review of models.
+    
+    Aligned with MARRMoT m_25_tcm_6p_4s.m but optimized for gradients.
     """
 
-    # --- 1. Effective Precipitation and Splitting ---
-    # flux_pn: Precipitation effectively contributing to moisture/flow
-    flux_pn = effective_1(P, PET, nearzero=nearzero)
-    zeros = torch.zeros_like(flux_pn)
-    flux_pn = torch.clamp(flux_pn, min=zeros, max=P)
+    # --- 0. Numerical Guards for Parameters ---
+    # Ensure strictly positive capacity to avoid division by zero
+    rc = torch.clamp(rc, min=nearzero)
 
-    # flux_en: Portion of P that "evaporates" before reaching soil (per MATLAB code index 2)
+    # --- 1. Effective Precipitation and Splitting ---
+    # flux_pn: Effective P (P - Interception Loss)
+    flux_pn = effective_1(P, PET, nearzero=nearzero)
+    zeros_tensor = torch.zeros_like(flux_pn)
+    flux_pn = torch.clamp(flux_pn, min=zeros_tensor, max=P)
+
+    # flux_en: Interception Evaporation
     flux_en = F.relu(P - flux_pn)
 
     # Split effective precipitation
-    flux_pby = split_1(
-        phi, flux_pn, nearzero=nearzero
-    )  # preferential recharge to S3
-    flux_pin = F.relu(flux_pn - flux_pby)  # infiltration to S1
+    # phi goes to S3 (bypass), rest to S1
+    flux_pby = split_1(phi, flux_pn, nearzero=nearzero)
+    flux_pin = F.relu(flux_pn - flux_pby)
 
     # --- 2. Upper Store Process (S1) ---
-    # flux_qex1: Saturation excess from upper store
+    # MATLAB: flux_qex1 = saturation_1(flux_pin,S1,rc);
+    # Meaning: S1 has capacity 'rc'.
     flux_qex1 = saturation_1(flux_pin, S1, rc, nearzero=nearzero)
-    flux_qex1 = torch.clamp(flux_qex1, min=zeros, max=flux_pin)
-
-    # Interim update for ET
+    
+    # Update S1 temp state
     S1_tmp = S1 + flux_pin - flux_qex1
     S1_tmp = torch.clamp(S1_tmp, min=nearzero)
 
-    # flux_ea: Evaporation from S1
+    # flux_ea: Evaporation from S1 (Linear)
+    # MATLAB: flux_ea = evap_1(S1,Ep,delta_t);
     flux_ea = evap_1(S1_tmp, PET, nearzero=nearzero)
-    flux_ea = torch.minimum(flux_ea, S1_tmp - nearzero)
-    flux_ea = torch.minimum(flux_ea, PET)
-    flux_ea = F.relu(flux_ea)
-
+    flux_ea = torch.minimum(flux_ea, S1_tmp - nearzero) # Mass balance constraint
+    
     # Final S1 update
     S1_new = S1_tmp - flux_ea
-    S1_new = torch.clamp(S1_new, min=nearzero)
+    S1_new = torch.clamp(S1_new, min=nearzero) # S1 cannot exceed rc usually, handled by qex1
 
     # --- 3. Deficit Store Process (S2) ---
     # S2 is a deficit store. S2=0 means saturated.
-    # flux_qex2: Percolation to saturated routing (S3) when deficit is filled
-    # saturation_9(incoming, S_deficit, threshold_deficit)
-    flux_qex2 = saturation_9(
-        flux_qex1, S2, torch.tensor(0.01, device=P.device), nearzero=nearzero
-    )
-    flux_qex2 = torch.clamp(flux_qex2, min=zeros, max=flux_qex1)
+    
+    # flux_qex2: Percolation from S1 (qex1) filling the deficit (S2)
+    # MATLAB: flux_qex2 = saturation_9(flux_qex1,S2,0.01);
+    # Logic: If Inflow (qex1) > Deficit (S2), Deficit becomes 0, Excess (qex2) flows out.
+    flux_qex2 = saturation_9(flux_qex1, S2, torch.tensor(0.01, device=P.device), nearzero=nearzero)
 
-    # flux_et: Transpiration from deficit store (increases deficit)
-    # Ep remaining after S1 ea
+    # flux_et: Transpiration
+    # MATLAB: flux_et = evap_16(gam,Inf,S1,0.01,Ep,delta_t);
+    # PROBLEM: Inf kills gradients.
+    # FIX: Use 'rc' instead of 'Inf'. This implies transpiration depends on S1 saturation (S1/rc).
+    # Logic: As S1 fills up (approaches rc), transpiration -> Ep.
+    # Note: Using S1_new to be consistent with time-stepping.
     pet_rem = F.relu(PET - flux_ea)
-    inf_tensor = torch.full_like(S1, float("inf"))
+    
     flux_et = evap_16(
         gam,
-        inf_tensor,
+        rc,     # Capacity
         S1_new,
-        torch.tensor(0.01, device=P.device),
+        torch.zeros_like(rc), # 将阈值改为 0，避免 rc < 0.01 时分母为负
         pet_rem,
-        nearzero=nearzero,
+        nearzero=nearzero
     )
     flux_et = F.relu(flux_et)
 
-    # Update S2 (Defict increases with ET and qex1-overflow but decreases with recharge)
-    # MATLAB: dS2 = et + qex2 - qex1
+    # Update S2 (Deficit)
+    # MATLAB: dS2 = flux_et + flux_qex2 - flux_qex1;
+    # Deficit INCREASES with Transpiration (et)
+    # Deficit DECREASES with Inflow (qex1) (Net change is + qex2 - qex1)
     S2_new = S2 + flux_et + flux_qex2 - flux_qex1
     S2_new = torch.clamp(S2_new, min=nearzero)
+    # Note: S2 technically can grow indefinitely in TCM if dry, but usually bounded by physics implicitly.
 
     # --- 4. Fast Routing Store (S3) ---
-    # Inflow is percolation (qex2) and bypass flow (pby)
+    # MATLAB: dS3 = flux_qex2 + flux_pby - flux_quz;
     inflow_S3 = flux_qex2 + flux_pby
     S3_tmp = S3 + inflow_S3
     S3_tmp = torch.clamp(S3_tmp, min=nearzero)
 
-    # flux_quz: Upper reservoir flow to S4
+    # flux_quz: Linear reservoir
     flux_quz = baseflow_1(k1, S3_tmp, nearzero=nearzero)
     flux_quz = torch.minimum(flux_quz, S3_tmp - nearzero)
-    flux_quz = F.relu(flux_quz)
-
-    # Update S3
+    
     S3_new = S3_tmp - flux_quz
     S3_new = torch.clamp(S3_new, min=nearzero)
 
     # --- 5. Slow Routing Store (S4) ---
-    # Inflow is quz
-    # flux_a: Abstraction rate
-    flux_a = torch.minimum(ca, S4 + flux_quz - nearzero)
-    flux_a = F.relu(flux_a)
-
+    # MATLAB: dS4 = flux_quz - flux_a - flux_q;
+    
+    # flux_a: Abstraction (Loss)
+    flux_a = torch.minimum(ca, S4 + flux_quz) # Limit to available water
+    
     S4_tmp = S4 + flux_quz - flux_a
     S4_tmp = torch.clamp(S4_tmp, min=nearzero)
 
-    # flux_q: Groundwater streamflow
-    # baseflow_6(p1=k2, p2=0, S) -> out = p1 * S^2
-    flux_q = baseflow_6(
-        k2, torch.tensor(0.0, device=P.device), S4_tmp, nearzero=nearzero
-    )
+    # flux_q: Groundwater flow (Non-linear k2 * S^2 usually, baseflow_6)
+    # baseflow_6(k, offset, S, dt) -> k * (S - offset)^2
+    flux_q = baseflow_6(k2, torch.tensor(0.0, device=P.device), S4_tmp, nearzero=nearzero)
     flux_q = torch.minimum(flux_q, S4_tmp - nearzero)
-    flux_q = F.relu(flux_q)
 
-    # Update S4
     S4_new = S4_tmp - flux_q
     S4_new = torch.clamp(S4_new, min=nearzero)
 
-    # --- 6. Output Aggregation ---
-    # Qsim = q (Final Slow Flow / Groundwater component)
-    # Ea = en + ea + et
+    # --- 6. Output ---
     Qsim = flux_q
     Ea = flux_en + flux_ea + flux_et
 

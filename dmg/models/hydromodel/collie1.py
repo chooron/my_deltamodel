@@ -1,8 +1,8 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.evap import evap_7
-from ..marrmot.saturation import saturation_1
+from .flux.evap import evap_7
+from .flux.saturation import saturation_1
 
 # 参数取值范围字典 (基于 MARRMoT m_01_collie1_1p_1s)
 COLLIE1_PARAMS_BOUNDS = {

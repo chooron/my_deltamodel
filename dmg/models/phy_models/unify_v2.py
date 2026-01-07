@@ -41,6 +41,7 @@ class UnifyV2(nn.Module):
         # Default configuration
         self.config = config or {}
         self.model_name = self.config.get("model_name", "hbv96")
+        print(f"calibrate {self.model_name}")
         self.name = f"Unify_{self.model_name}"
 
         # Load model info from registry
@@ -155,7 +156,7 @@ class UnifyV2(nn.Module):
         x_dict: Dict[str, torch.Tensor],
         parameters: Tuple[Optional[torch.Tensor], torch.Tensor],
     ) -> Union[Tuple[torch.Tensor, ...], Dict[str, torch.Tensor]]:
-        x = x_dict["x_phy"]
+        x_phy = x_dict["x_phy"]
 
         if not self.warm_up_states:
             self.pred_cutoff = self.warm_up
@@ -163,7 +164,7 @@ class UnifyV2(nn.Module):
         # Unpack and descale parameters
         phy_dy, phy_static = self.unpack_parameters(parameters)
 
-        n_grid = x.size(1)
+        n_grid = x_phy.size(1)
 
         # Initialize states
         states = self._init_states(n_grid)
@@ -177,16 +178,17 @@ class UnifyV2(nn.Module):
             phy_static, static_names, self.parameter_bounds
         )
 
-        return self._run_model(x, states, {}, phy_static_dict)
+        return self._run_model(x_dict, states, {}, phy_static_dict)
 
     def _run_model(
         self,
-        forcing: torch.Tensor,
+        x_dict: dict,
         states: Tuple[torch.Tensor, ...],
         dy_params: Dict[str, torch.Tensor],
         static_params: Dict[str, torch.Tensor],
     ) -> Union[Tuple[torch.Tensor, ...], Dict[str, torch.Tensor]]:
         """Optimized unified model execution loop (Static Params Only)"""
+        forcing = x_dict["x_phy"]
         n_steps, n_grid = forcing.shape[:2]
         nmul = self.nmul
         device = self.device
@@ -231,41 +233,20 @@ class UnifyV2(nn.Module):
         if self.initialize:
             return curr_states
 
-        return self._finalize_output(Qsim_out, n_steps, n_grid)
+        return self._finalize_output(Qsim_out)
 
     def _apply_averaging(self, Qsimmu: torch.Tensor) -> torch.Tensor:
         """Ensemble averaging over nmul dimension"""
         return Qsimmu.flatten(start_dim=1)
 
-    # def _apply_routing(
-    #     self, Qsim: torch.Tensor, n_steps: int, n_grid: int
-    # ) -> torch.Tensor:
-    #     """Gamma-unit hydrograph routing"""
-    #     # (B, 1) -> (T, B, 1) for routing weights
-    #     rout_a = (
-    #         self.routing_param_dict["rout_a"].repeat(n_steps, 1).unsqueeze(-1)
-    #     )
-    #     rout_b = (
-    #         self.routing_param_dict["rout_b"].repeat(n_steps, 1).unsqueeze(-1)
-    #     )
-
-    #     UH = uh_gamma(rout_a, rout_b, lenF=15).permute([1, 2, 0])
-    #     rf = torch.unsqueeze(Qsim, -1).permute([1, 2, 0])
-    #     Qsrout = uh_conv(rf, UH).permute([2, 0, 1])
-    #     return Qsrout
 
     def _finalize_output(
         self,
         Qsim_out: torch.Tensor,
-        n_steps: int,
-        n_grid: int,
     ) -> Dict[str, torch.Tensor]:
         """Finalize and package model outputs"""
         # 1. Ensemble average
         Qsimavg = self._apply_averaging(Qsim_out)
-
-        # 2. Routing
-        # Qs = self._apply_routing(Qsimavg, n_steps, n_grid)
 
         # 3. Build result dict
         result = {

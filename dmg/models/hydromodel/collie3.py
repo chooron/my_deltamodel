@@ -1,10 +1,11 @@
 import torch
-from typing import Optional, Tuple
-from ..marrmot.evap import evap_7, evap_3
-from ..marrmot.saturation import saturation_1
-from ..marrmot.interflow import interflow_9
-from ..marrmot.baseflow import baseflow_2
-from ..marrmot.split import split_1
+import torch.nn.functional as F
+from typing import Tuple
+from .flux.evap import evap_7, evap_3
+from .flux.saturation import saturation_1
+from .flux.interflow import interflow_9
+from .flux.baseflow import baseflow_2
+from .flux.split import split_1
 
 # Parameter range dictionary (matching MARRMoT m_11_collie3_6p_2s)
 COLLIE_PARAMS_BOUNDS = {
@@ -39,6 +40,7 @@ def create_initial_state(
     S2 = torch.zeros((n_grid, nmul), device=device) + nearzero
     return S1, S2
 
+# todo collie3 精度偏低
 def collie3_step(
     P: torch.Tensor,
     T: torch.Tensor,
@@ -57,49 +59,49 @@ def collie3_step(
     """
     Collie River v3 model single step calculation.
     """
-    # --- 1. S1 Process (Soil Moisture) ---
-    # Step 1: Inflow + Saturation Excess Runoff
-    # saturation_1(P, S, Smax) handles the overflow calculation
-    flux_qse = saturation_1(P, S1, smax)
-    S1 = S1 + P - flux_qse
-    S1 = torch.clamp(S1, min=nearzero)
-    
-    # Step 2: Evapotranspiration
-    # flux_eb (non-vegetated): evap_7(S1, smax, (1-M)*PET)
-    flux_eb = evap_7(S1, smax, (1.0 - m) * PET)
-    S1 = torch.clamp(S1 - flux_eb, min=nearzero)
-    
-    # flux_ev (vegetated): evap_3(Sfc, S1, Smax, M*PET)
-    # Note: In MARRMoT m_11, evap_3 uses Sfc as the threshold (LP)
-    flux_ev = evap_3(fc, S1, smax, m * PET)
-    S1 = torch.clamp(S1 - flux_ev, min=nearzero)
-    
-    # Step 3: Interflow
-    # flux_qss = interflow_9(S1, a, Sfc*S1max, b)
+    # 1) Saturation excess runoff from the top store
+    flux_qse = saturation_1(P, S1, smax, nearzero=nearzero)
+    flux_qse = torch.clamp(flux_qse, min=torch.zeros_like(flux_qse), max=P)
+    S1_tmp = torch.clamp(S1 + P - flux_qse, min=nearzero)
+
+    # 2) Evapotranspiration split into bare soil and vegetation components
+    pet_bare = (1.0 - m) * PET
+    pet_veg = m * PET
+    flux_eb = evap_7(S1_tmp, smax, pet_bare, nearzero=nearzero)
+    flux_ev = evap_3(fc, S1_tmp, smax, pet_veg, nearzero=nearzero)
+
+    flux_ea_total = flux_eb + flux_ev
+    flux_ea_total = torch.minimum(flux_ea_total, S1_tmp - nearzero)
+    flux_ea_total = torch.minimum(flux_ea_total, PET)
+    flux_ea_total = F.relu(flux_ea_total)
+
+    S1_tmp2 = torch.clamp(S1_tmp - flux_ea_total, min=nearzero)
+
+    # 3) Interflow from the top store
     sfc_mm = fc * smax
-    flux_qss = interflow_9(S1, a, sfc_mm, b)
-    S1 = torch.clamp(S1 - flux_qss, min=nearzero)
-    
-    # Split interflow
-    # flux_qsss goes to S2, flux_qss_direct goes to channel
+    flux_qss = interflow_9(S1_tmp2, a, sfc_mm, b, nearzero=nearzero)
+    flux_qss = torch.minimum(flux_qss, S1_tmp2 - nearzero)
+    flux_qss = F.relu(flux_qss)
+
+    S1_new = torch.clamp(S1_tmp2 - flux_qss, min=nearzero)
+
+    # 4) Split interflow between groundwater and direct flow
     flux_qsss = split_1(lambda_par, flux_qss)
     flux_qss_direct = split_1(1.0 - lambda_par, flux_qss)
-    
-    # --- 2. S2 Process (Groundwater) ---
-    # Step 4: S2 Update (Inflow from split interflow)
-    S2 = S2 + flux_qsss
-    
-    # Step 5: Baseflow (Slow Process)
-    # flux_qsg = baseflow_2(S2, 1/a, 1/b)
+
+    # 5) Groundwater store update and baseflow
+    S2_tmp = torch.clamp(S2 + flux_qsss, min=nearzero)
     inv_a = 1.0 / (a + nearzero)
     inv_b = 1.0 / (b + nearzero)
-    flux_qsg = baseflow_2(S2, inv_a, inv_b)
-    S2 = torch.clamp(S2 - flux_qsg, min=nearzero)
-    
-    # --- 3. Output Aggregation ---
-    # Q = qse + (1-lambda)*qss + qsg
+    flux_qsg = baseflow_2(S2_tmp, inv_a, inv_b, nearzero=nearzero)
+    flux_qsg = torch.minimum(flux_qsg, S2_tmp - nearzero)
+    flux_qsg = F.relu(flux_qsg)
+
+    S2_new = torch.clamp(S2_tmp - flux_qsg, min=nearzero)
+
+    # 6) Aggregate outputs
     Q = flux_qse + flux_qss_direct + flux_qsg
-    Ea = flux_eb + flux_ev
-    
-    return Q, Ea, S1, S2
+    Ea = flux_ea_total
+
+    return Q, Ea, S1_new, S2_new
 

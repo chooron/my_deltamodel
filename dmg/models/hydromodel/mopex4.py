@@ -1,90 +1,105 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.snowfall import snowfall_1
-from ..marrmot.rainfall import rainfall_1
-from ..marrmot.melt import melt_1
-from ..marrmot.evap import evap_7
-from ..marrmot.interception import interception_4
-from ..marrmot.saturation import saturation_1
-from ..marrmot.recharge import recharge_3
-from ..marrmot.baseflow import baseflow_1
+from .mopex1 import (
+    baseflow_1,
+    recharge_3,
+    evap_7,
+    saturation_1,
+)
 
-# Parameter range dictionary (based on MARRMoT m_32_mopex4_10p_5s)
+# MARRMoT-style parameter bounds (seasonal interception, no external LAI)
 MOPEX4_PARAMS_BOUNDS = {
-    "tcrit": [-3.0, 3.0],  # Snowfall & snowmelt temperature [oC]
-    "ddf": [0.0, 20.0],  # Degree-day factor for snowmelt [mm/oC/d]
-    "s2max": [1.0, 2000.0],  # Maximum soil moisture storage [mm]
-    "tw": [0.0, 1.0],  # Groundwater leakage time [d-1]
-    "i_alpha": [0.0, 1.0],  # Intercepted fraction of Pr [-]
-    "i_s": [1.0, 365.0],  # Maximum Leaf Area Index timing [d]
-    "tu": [0.0, 1.0],  # Slow flow routing response time [d-1]
-    "se_frac": [
-        0.05,
-        0.95,
-    ],  # Root zone storage capacity as fraction of Sb2 [-]
-    "s3max": [1.0, 2000.0],  # Maximum root zone/groundwater storage [mm]
-    "tc": [0.0, 1.0],  # Mean residence time [d-1]
+    "Sb1": [0.01, 50.0],
+    "tw": [0.01, 5.0],
+    "tu": [1.0, 2000.0],
+    "Se": [1.0, 1000.0],
+    "tc": [0.1, 30.0],
+    "ddf": [0.0, 20.0],
+    "tcrit": [-3.0, 3.0],
+    "Sb2": [1.0, 1500.0],
+    "alpha": [0.0, 1.0],
+    "is_time": [0.0, 365.0],
 }
-
-# Parameter description dictionary
-MOPEX4_PARAMS_DESC = {
-    "tcrit": "Snowfall & snowmelt temperature [oC]",
-    "ddf": "Degree-day factor for snowmelt [mm/oC/d]",
-    "s2max": "Maximum soil moisture storage [mm]",
-    "tw": "Groundwater leakage time [d-1]",
-    "i_alpha": "Intercepted fraction of Pr [-]",
-    "i_s": "Maximum Leaf Area Index timing [d]",
-    "tu": "Slow flow routing response time [d-1]",
-    "se_frac": "Root zone storage capacity as fraction of s3max [-]",
-    "s3max": "Maximum root zone/groundwater storage [mm]",
-    "tc": "Mean residence time [d-1]",
-}
-
 
 def create_initial_state(
     n_grid: int, nmul: int, device: torch.device, nearzero: float = 1e-6
-) -> Tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
-]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Initialize state variables (S1, S2, Sc1, Sc2)."""
+    return (
+        torch.zeros((n_grid, nmul), device=device) + nearzero,
+        torch.zeros((n_grid, nmul), device=device) + nearzero,
+        torch.zeros((n_grid, nmul), device=device) + nearzero,
+        torch.zeros((n_grid, nmul), device=device) + nearzero,
+        torch.zeros((n_grid, nmul), device=device) + nearzero
+    )
+
+def interception_seasonal(
+    P: torch.Tensor,
+    doy: torch.Tensor,
+    alpha: torch.Tensor,
+    is_time: torch.Tensor,
+    nearzero: float = 1e-6,
+) -> torch.Tensor:
     """
-    Create initial states for MOPEX-4 model.
-    S1: Snow store
-    S2: Surface soil moisture store
-    S3: Root zone store
-    S4: Fast routing store
-    S5: Slow routing store
+    Seasonal interception using a cosine-based seasonality factor that peaks at day `is_time`.
+    Replaces external LAI forcing with a calibrated sinusoid (MARRMoT convention).
     """
-    S1 = torch.zeros((n_grid, nmul), device=device) + nearzero
-    S2 = torch.zeros((n_grid, nmul), device=device) + nearzero
-    S3 = torch.zeros((n_grid, nmul), device=device) + nearzero
-    S4 = torch.zeros((n_grid, nmul), device=device) + nearzero
-    S5 = torch.zeros((n_grid, nmul), device=device) + nearzero
-    return S1, S2, S3, S4, S5
+
+    rad = 2.0 * 3.1415926535 * (doy - is_time) / 365.0
+    season_factor = 0.5 * (torch.cos(rad) + 1.0)
+
+    flux_potential = alpha * P * season_factor
+    flux_interception = torch.minimum(flux_potential, P)
+
+    return flux_interception
+
+
+def interception_1(
+    P: torch.Tensor,
+    alpha: torch.Tensor,
+    LAI: torch.Tensor,
+    LAI_max: float = 5.0,
+    nearzero: float = 1e-6,
+) -> torch.Tensor:
+    """
+    Vegetation Interception.
+    I = alpha * P * (LAI / LAI_max)
+    """
+    # Normalized LAI
+    lai_ratio = torch.clamp(LAI / (LAI_max + nearzero), max=1.0)
+
+    # Potential Interception
+    I_pot = alpha * P * lai_ratio
+
+    # Actual Interception cannot exceed P
+    I = torch.minimum(I_pot, P)
+
+    return I
 
 
 def mopex4_step(
     P: torch.Tensor,
     T: torch.Tensor,
     PET: torch.Tensor,
-    # t_idx: torch.Tensor,  # TODO add t_idx
-    # Parameters matching MOPEX4_PARAMS_BOUNDS keys
-    tcrit: torch.Tensor,
-    ddf: torch.Tensor,
-    s2max: torch.Tensor,
+    doy: torch.Tensor,
+    # Parameters
+    Sb1: torch.Tensor,
     tw: torch.Tensor,
-    i_alpha: torch.Tensor,
-    i_s: torch.Tensor,
     tu: torch.Tensor,
-    se_frac: torch.Tensor,
-    s3max: torch.Tensor,
+    Se: torch.Tensor,
     tc: torch.Tensor,
-    # State variables
+    ddf: torch.Tensor,
+    tcrit: torch.Tensor,
+    Sb2: torch.Tensor,
+    alpha: torch.Tensor,
+    is_time: torch.Tensor,
     S1: torch.Tensor,
     S2: torch.Tensor,
-    S3: torch.Tensor,
-    S4: torch.Tensor,
-    S5: torch.Tensor,
+    Sc1: torch.Tensor,
+    Sc2: torch.Tensor,
+    Sn: torch.Tensor,
+    delta_t: float = 1.0,
     nearzero: float = 1e-6,
 ) -> Tuple[
     torch.Tensor,
@@ -95,139 +110,74 @@ def mopex4_step(
     torch.Tensor,
     torch.Tensor,
 ]:
-    """
-    MOPEX-4 model single-step calculation.
+    # ... Guards ...
+    S1 = F.relu(S1)
+    S2 = F.relu(S2)
+    Sc1 = F.relu(Sc1)
+    Sc2 = F.relu(Sc2)
+    Sn = F.relu(Sn)
 
-    Model reference:
-    Ye, S., Yaeger, M., Coopersmith, E., Cheng, L., & Sivapalan, M. (2012).
-    Exploring the physical controls of regional patterns of flow duration
-    curves - Part 2: Role of seasonality, the regime curve, and associated
-    process controls. Hydrology and Earth System Sciences, 16(11).
-    """
+    Sb1 = torch.clamp(Sb1, min=nearzero)
+    tw = torch.clamp(tw, min=nearzero)
+    tu = torch.clamp(tu, min=nearzero)
+    Se = torch.clamp(Se, min=nearzero)
+    tc = torch.clamp(tc, min=nearzero)
+    ddf = torch.clamp(ddf, min=nearzero)
+    Sb2 = torch.clamp(Sb2, min=nearzero)
+    alpha = torch.clamp(alpha, min=nearzero)
 
-    # --- 0. Auxiliary Parameters ---
-    tmax = torch.tensor(
-        365.25, device=P.device
-    )  # Duration of seasonal cycle [d]
+    # --- 0. Seasonal Interception ---
+    flux_i = interception_seasonal(P, doy, alpha, is_time, nearzero)
+    P_through = P - flux_i
 
-    # --- 1. Snow Process (S1) ---
-    # flux_ps: snowfall
-    flux_ps = snowfall_1(P, T, tcrit, nearzero=nearzero)
-    # flux_pr: rainfall
-    flux_pr = rainfall_1(P, T, tcrit, nearzero=nearzero)
+    # --- 1. Snow Module (Uses P_through) ---
+    is_rain = (T > tcrit).float()
+    flux_qn = torch.minimum(F.relu(T - tcrit) * ddf * delta_t, Sn)
+    Ps = P_through * (1 - is_rain)
+    Pr = P_through * is_rain
+    Sn_new = torch.clamp(Sn + Ps - flux_qn, min=0.0)
+    P_eff = Pr + flux_qn
 
-    # flux_qn: snowmelt
-    flux_qn = melt_1(ddf, tcrit, T, S1, nearzero=nearzero)
-    flux_qn = torch.minimum(flux_qn, S1 - nearzero)
-    flux_qn = F.relu(flux_qn)
+    # --- 2. Soil & Subsurface (Same as Mopex 3) ---
+    flux_q1f = saturation_1(P_eff, S1, Sb1)
+    S1_avail = S1 + P_eff - flux_q1f
 
-    # Update S1 final
-    S1_new = S1 + flux_ps - flux_qn
-    S1_new = torch.clamp(S1_new, min=nearzero)
+    flux_qw_pot = recharge_3(tw, S1_avail)
+    flux_et1_pot = evap_7(S1_avail, Sb1, PET, delta_t)
 
-    # --- 2. Surface Soil Moisture Process (S2) ---
-    # Interception (i) is a fraction of rainfall (pr)
-    # interception_4(alpha, peak_timing, current_time, cycle_length, rainfall)
-    t_idx = torch.ones_like(P)
-    flux_i = interception_4(
-        i_alpha, i_s, t_idx, tmax, flux_pr, nearzero=nearzero
-    )
-    zeros = torch.zeros_like(flux_i)
-    flux_i = torch.clamp(flux_i, min=zeros, max=flux_pr)
+    sum_flux_pot = flux_qw_pot + flux_et1_pot
+    sum_flux_actual = torch.minimum(sum_flux_pot, S1_avail)
+    alloc_ratio = sum_flux_actual / (sum_flux_pot + nearzero)
+    flux_qw = flux_qw_pot * alloc_ratio
+    flux_et1 = flux_et1_pot * alloc_ratio
+    S1_new = torch.clamp(S1_avail - flux_qw - flux_et1, min=0.0)
 
-    # Rainfall reaching soil
-    net_pr = F.relu(flux_pr - flux_i)
-    inflow_S2 = net_pr + flux_qn
+    # Bucket 2 (with overflow)
+    S2_in = S2 + flux_qw
+    flux_q2f = saturation_1(torch.zeros_like(S2_in), S2_in, Sb2)
+    S2_avail = S2_in - flux_q2f
 
-    # flux_q1f: Fast saturation excess runoff from S2
-    flux_q1f = saturation_1(inflow_S2, S2, s2max, nearzero=nearzero)
-    flux_q1f = torch.clamp(flux_q1f, min=zeros, max=inflow_S2)
+    flux_q2u_pot = baseflow_1(tu, S2_avail)
+    flux_et2_pot = evap_7(S2_avail, Se, PET, delta_t)
 
-    # Update S2 for infiltration
-    S2_tmp = S2 + inflow_S2 - flux_q1f
-    S2_tmp = torch.clamp(S2_tmp, min=nearzero)
+    sum_flux_pot_2 = flux_q2u_pot + flux_et2_pot
+    sum_flux_actual_2 = torch.minimum(sum_flux_pot_2, S2_avail)
+    alloc_ratio_2 = sum_flux_actual_2 / (sum_flux_pot_2 + nearzero)
+    flux_q2u = flux_q2u_pot * alloc_ratio_2
+    flux_et2 = flux_et2_pot * alloc_ratio_2
+    S2_new = torch.clamp(S2_avail - flux_q2u - flux_et2, min=0.0)
 
-    # flux_et1: Actual evaporation from S2 soil
-    flux_et1 = evap_7(S2_tmp, s2max, PET, nearzero=nearzero)
-    flux_et1 = torch.minimum(flux_et1, S2_tmp - nearzero)
-    flux_et1 = F.relu(flux_et1)
+    # --- 3. Routing (Same as Mopex 3) ---
+    Sc1_in = Sc1 + flux_q1f + flux_q2f
+    flux_qf = torch.minimum(baseflow_1(tc, Sc1_in), Sc1_in)
+    Sc1_new = torch.clamp(Sc1_in - flux_qf, min=0.0)
 
-    S2_tmp2 = S2_tmp - flux_et1
-    S2_tmp2 = torch.clamp(S2_tmp2, min=nearzero)
+    Sc2_in = Sc2 + flux_q2u
+    flux_qs = torch.minimum(baseflow_1(tc, Sc2_in), Sc2_in)
+    Sc2_new = torch.clamp(Sc2_in - flux_qs, min=0.0)
 
-    # flux_qw: Groundwater leakage (Recharge to S3)
-    flux_qw = recharge_3(tw, S2_tmp2, nearzero=nearzero)
-    flux_qw = torch.minimum(flux_qw, S2_tmp2 - nearzero)
-    flux_qw = F.relu(flux_qw)
+    # Total ET includes Interception
+    ET_total = flux_et1 + flux_et2 + flux_i
+    Q_total = flux_qf + flux_qs
 
-    # Final S2 update
-    S2_new = S2_tmp2 - flux_qw
-    S2_new = torch.clamp(S2_new, min=nearzero)
-
-    # --- 3. Root Zone Storage Process (S3) ---
-    # Inflow is leakage from S2
-    # flux_q2f: saturation excess overflow from S3 (to S4)
-    flux_q2f = saturation_1(flux_qw, S3, s3max, nearzero=nearzero)
-    flux_q2f = torch.clamp(flux_q2f, min=zeros, max=flux_qw)
-
-    # Update S3 for evaporation
-    S3_tmp = S3 + flux_qw - flux_q2f
-    S3_tmp = torch.clamp(S3_tmp, min=nearzero)
-
-    # Remaining PET after S2 soil ET
-    PET_rem = F.relu(PET - flux_et1)
-
-    # flux_et2: Actual evaporation from S3 (Root Zone)
-    # Using se_frac * s3max as storage capacity for root zone ET
-    flux_et2 = evap_7(S3_tmp, se_frac * s3max, PET_rem, nearzero=nearzero)
-    flux_et2 = torch.minimum(flux_et2, S3_tmp - nearzero)
-    flux_et2 = F.relu(flux_et2)
-
-    S3_tmp2 = S3_tmp - flux_et2
-    S3_tmp2 = torch.clamp(S3_tmp2, min=nearzero)
-
-    # flux_q2u: Slow flow routing response time (to S5)
-    flux_q2u = baseflow_1(tu, S3_tmp2, nearzero=nearzero)
-    flux_q2u = torch.minimum(flux_q2u, S3_tmp2 - nearzero)
-    flux_q2u = F.relu(flux_q2u)
-
-    # Final S3 update
-    S3_new = S3_tmp2 - flux_q2u
-    S3_new = torch.clamp(S3_new, min=nearzero)
-
-    # --- 4. Fast Routing Store (S4) ---
-    # Inflow is combination of fast storm runoff and root zone overflow
-    inflow_S4 = flux_q1f + flux_q2f
-    S4_tmp = S4 + inflow_S4
-    S4_tmp = torch.clamp(S4_tmp, min=nearzero)
-
-    # flux_qf: Fast discharge
-    flux_qf = baseflow_1(tc, S4_tmp, nearzero=nearzero)
-    flux_qf = torch.minimum(flux_qf, S4_tmp - nearzero)
-    flux_qf = F.relu(flux_qf)
-
-    # Final S4 update
-    S4_new = S4_tmp - flux_qf
-    S4_new = torch.clamp(S4_new, min=nearzero)
-
-    # --- 5. Slow Routing Store (S5) ---
-    # Inflow is subsurface flow q2u
-    S5_tmp = S5 + flux_q2u
-    S5_tmp = torch.clamp(S5_tmp, min=nearzero)
-
-    # flux_qs: Slow discharge
-    flux_qs = baseflow_1(tc, S5_tmp, nearzero=nearzero)
-    flux_qs = torch.minimum(flux_qs, S5_tmp - nearzero)
-    flux_qs = F.relu(flux_qs)
-
-    # Final S5 update
-    S5_new = S5_tmp - flux_qs
-    S5_new = torch.clamp(S5_new, min=nearzero)
-
-    # --- 6. Output Aggregation ---
-    # Qsim = Fast discharge + Slow discharge
-    # Ea = et1 (Soil) + i (Interception) + et2 (Root zone)
-    Qsim = flux_qf + flux_qs
-    Ea = flux_et1 + flux_i + flux_et2
-
-    return Qsim, Ea, S1_new, S2_new, S3_new, S4_new, S5_new
+    return Q_total, ET_total, S1_new, S2_new, Sc1_new, Sc2_new, Sn_new

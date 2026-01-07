@@ -1,11 +1,11 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.evap import evap_7
-from ..marrmot.saturation import saturation_1
-from ..marrmot.excess import excess_1
-from ..marrmot.interflow import interflow_3
-from ..marrmot.recharge import recharge_3
+from .flux.evap import evap_7
+from .flux.saturation import saturation_1
+from .flux.excess import excess_1
+from .flux.interflow import interflow_3
+from .flux.recharge import recharge_3
 
 # Parameter range dictionary (based on MARRMoT m_19_australia_8p_3s)
 AUSTRALIA_PARAMS_BOUNDS = {

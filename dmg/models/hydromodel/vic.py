@@ -1,14 +1,14 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.evap import evap_7
-from ..marrmot.interception import interception_1
-from ..marrmot.excess import excess_1
-from ..marrmot.saturation import saturation_1, saturation_2
-from ..marrmot.effective import effective_1
-from ..marrmot.percolation import percolation_5
-from ..marrmot.baseflow import baseflow_5
-from ..marrmot.phenology import phenology_2
+from .flux.evap import evap_7
+from .flux.interception import interception_1
+from .flux.excess import excess_1
+from .flux.saturation import saturation_1, saturation_2
+from .flux.effective import effective_1
+from .flux.percolation import percolation_5
+from .flux.baseflow import baseflow_5
+from .flux.phenology import phenology_2
 
 # Parameter range dictionary (based on MARRMoT m_22_vic_10p_3s)
 VIC_PARAMS_BOUNDS = {

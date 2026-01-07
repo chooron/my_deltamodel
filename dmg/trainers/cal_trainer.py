@@ -357,7 +357,7 @@ class CalTrainer(BaseTrainer):
         self.is_in_train = False
 
         # 1. 获取 Multi-Start 的倍数 (从配置读取, 默认为 1)
-        nmul = self.config['delta_model']['phy_model'].get('num_start', 1)
+        nmul = self.config['delta_model']['phy_model'].get('nmul', 16)
 
         # Track overall predictions and observations
         batch_predictions = []
@@ -387,7 +387,7 @@ class CalTrainer(BaseTrainer):
         # Save predictions and calculate metrics
         # 现在的 observations 和 batch_predictions 长度都是 N*16，完全匹配，直接保存即可
         log.info("Saving model outputs + Calculating metrics")
-        save_outputs(self.config, batch_predictions, observations)
+        save_outputs(self.config, batch_predictions, observations, create_dirs=True)
         self.predictions = self._batch_data(batch_predictions)
 
         # Calculate metrics

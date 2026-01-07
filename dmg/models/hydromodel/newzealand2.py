@@ -1,26 +1,24 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.evap import evap_1, evap_6, evap_5
-from ..marrmot.interception import interception_1
-from ..marrmot.saturation import saturation_1
-from ..marrmot.interflow import interflow_9
-from ..marrmot.baseflow import baseflow_1
+from .flux.evap import evap_1, evap_6, evap_5
+from .flux.interception import interception_1
+from .flux.saturation import saturation_1
+from .flux.interflow import interflow_9
+from .flux.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_16_newzealand2_8p_2s)
 NEWZEALAND2_PARAMS_BOUNDS = {
     "s1max": [0.0, 5.0],  # Maximum interception storage [mm]
     "s2max": [1.0, 2000.0],  # Maximum soil moisture storage [mm]
-    "sfc_frac": [
-        0.05,
-        0.95,
-    ],  # Field capacity as fraction of maximum soil moisture [-]
+    "sfc_frac": [0.05, 0.95],  # Field capacity fraction [-]
     "m": [0.05, 0.95],  # Fraction forest [-]
     "a": [0.0, 1.0],  # Subsurface runoff coefficient [d-1]
     "b": [1.0, 5.0],  # Runoff non-linearity [-]
     "tcbf": [0.0, 1.0],  # Baseflow runoff coefficient [d-1]
-    "d_delay": [1.0, 120.0],  # Routing time delay [d]
+    "d_delay": [1.0, 30.0],  # Routing time delay [d] (UH base)
 }
+
 
 # Parameter description dictionary
 NEWZEALAND2_PARAMS_DESC = {

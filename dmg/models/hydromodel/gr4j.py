@@ -1,11 +1,11 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.evap import evap_11
-from ..marrmot.saturation import saturation_4
-from ..marrmot.percolation import percolation_3
-from ..marrmot.recharge import recharge_2
-from ..marrmot.baseflow import baseflow_3
+from .flux.evap import evap_11
+from .flux.saturation import saturation_4
+from .flux.percolation import percolation_3
+from .flux.recharge import recharge_2
+from .flux.baseflow import baseflow_3
 
 # Parameter range dictionary (based on MARRMoT m_07_gr4j_4p_2s)
 GR4J_PARAMS_BOUNDS = {
@@ -98,7 +98,9 @@ def gr4j_step(
     pr = (flux_pn - flux_ps) + flux_perc
 
     # Split into two branches: 90% to routing store S2, 10% direct
-    # In this implementation, we assume instantaneous routing if uh_ is missing
+    # In this implementation, we assume instantaneous routing if uh_ is missing q9 for DplHalf1 DplFull2
+    #     uh_q9 = uh_1_half(x4,delta_t);
+    # uh_q1 = uh_2_full(2*x4,delta_t);
     flux_q9_in = 0.9 * pr
     flux_q1_direct = 0.1 * pr
 

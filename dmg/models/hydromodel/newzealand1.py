@@ -1,10 +1,10 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.evap import evap_6, evap_5
-from ..marrmot.saturation import saturation_1
-from ..marrmot.interflow import interflow_9
-from ..marrmot.baseflow import baseflow_1
+from .flux.evap import evap_6, evap_5
+from .flux.saturation import saturation_1
+from .flux.interflow import interflow_9
+from .flux.baseflow import baseflow_1
 
 # 参数取值范围字典 (基于 MARRMoT m_04_newzealand1_6p_1s)
 NEWZEALAND1_PARAMS_BOUNDS = {

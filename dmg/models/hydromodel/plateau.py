@@ -1,12 +1,12 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.interception import interception_2
-from ..marrmot.infiltration import infiltration_4
-from ..marrmot.evap import evap_4
-from ..marrmot.capillary import capillary_2
-from ..marrmot.saturation import saturation_1
-from ..marrmot.baseflow import baseflow_1
+from .flux.interception import interception_2
+from .flux.infiltration import infiltration_4
+from .flux.evap import evap_4
+from .flux.capillary import capillary_2
+from .flux.saturation import saturation_1
+from .flux.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_15_plateau_8p_2s)
 PLATEAU_PARAMS_BOUNDS = {

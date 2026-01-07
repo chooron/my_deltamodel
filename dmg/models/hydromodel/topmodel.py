@@ -1,10 +1,10 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.saturation import saturation_7, saturation_1
-from ..marrmot.evap import evap_3
-from ..marrmot.interflow import interflow_10
-from ..marrmot.baseflow import baseflow_4
+from .flux.saturation import saturation_7, saturation_1
+from .flux.evap import evap_3
+from .flux.interflow import interflow_10
+from .flux.baseflow import baseflow_4
 
 # Parameter range dictionary (based on MARRMoT m_14_topmodel_7p_2s)
 TOPMODEL_PARAMS_BOUNDS = {
@@ -73,7 +73,6 @@ def topmodel_step(
     mu_fixed = torch.tensor(3.0, device=P.device)
     # lambda_para: Mean of the gamma distribution
     lambda_para = chi * phi + mu_fixed
-
     # flux_qof: Saturation excess from variable contributing area (Gamma distribution)
     # saturation_7(p1=chi, p2=phi, p3=mu, p4=lambda, p5=f, S=S2, In=P)
     flux_qof = saturation_7(

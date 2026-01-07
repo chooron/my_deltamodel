@@ -92,24 +92,67 @@ def saturation_6(
 
 
 def saturation_7(
-    p1: torch.Tensor,
-    p2: torch.Tensor,
-    p3: torch.Tensor,
-    p4: torch.Tensor,
-    p5: torch.Tensor,
-    S: torch.Tensor,
-    incoming_flux: torch.Tensor,
-    nearzero: float = 1e-6,
+    p1: torch.Tensor, # scale (theta)
+    p2: torch.Tensor, # shape (k)
+    p3: torch.Tensor, # shift
+    p4: torch.Tensor, # absolute scaling
+    p5: torch.Tensor, # linear scaling
+    S: torch.Tensor,  # current storage
+    In: torch.Tensor, # incoming flux
+    nearzero: float = 1e-6
 ) -> torch.Tensor:
     """
-    Saturation excess from a store with different degrees of saturation (gamma function variant).
+    Approximation of MARRMoT saturation_7 using Log-Normal distribution.
+    Uses explicit moment matching (Mean/Var) to map Gamma params to LogNormal params.
     """
-    x_low = p5 * F.relu(S) + p4
-    y = F.relu(x_low - p3)
-    return (
-        torch.special.gammaincc(p2 + nearzero, y / (p1 + nearzero))
-        * incoming_flux
-    )
+    
+    # --- 1. 计算 Gamma 分布的统计量 ---
+    # Mean = k * theta = p2 * p1
+    # Var  = k * theta^2 = p2 * p1^2
+    gamma_mean = p2 * p1
+    gamma_var = p2 * (p1 ** 2)
+    
+    # --- 2. 矩匹配转换为 Log-Normal 参数 ---
+    # 公式:
+    # sigma_ln^2 = ln(1 + Var / Mean^2)
+    # mu_ln      = ln(Mean) - 0.5 * sigma_ln^2
+    
+    # 计算均值的平方 (加上 nearzero 防止除0)
+    mean_sq = gamma_mean ** 2 + nearzero
+    
+    # 显式使用 gamma_var
+    # term = 1 + (Var / Mean^2)
+    term = 1.0 + (gamma_var / mean_sq)
+    
+    sigma_ln_sq = torch.log(term)
+    sigma_ln = torch.sqrt(sigma_ln_sq)
+    
+    mu_ln = torch.log(gamma_mean + nearzero) - 0.5 * sigma_ln_sq
+    
+    # --- 3. 确定积分下限 (对应 MATLAB 的 integral(..., limit, Inf)) ---
+    # 物理意义：分布向右平移了 p3，所以输入 x 也要减去 p3
+    limit_abs = p5 * torch.clamp(S, min=0.0) + p4
+    x_val = torch.clamp(limit_abs - p3, min=nearzero)
+    
+    # --- 4. 计算 1 - CDF (Survival Function) ---
+    # Standardize: z = (ln(x) - mu) / sigma
+    log_x = torch.log(x_val)
+    z = (log_x - mu_ln) / (sigma_ln + nearzero) # 加上 nearzero 防止 sigma 极小
+    
+    # LogNormal CDF = 0.5 * (1 + erf(z / sqrt(2)))
+    # sqrt(2) approx 1.41421356
+    cdf = 0.5 * (1.0 + torch.erf(z / 1.41421356))
+    
+    # Integral from limit to Inf = 1 - CDF(limit)
+    survival_prob = 1.0 - cdf
+    
+    # 保证概率在 [0, 1] 范围内
+    survival_prob = torch.clamp(survival_prob, min=0.0, max=1.0)
+    
+    # --- 5. 计算通量 ---
+    out = survival_prob * In
+    
+    return out
 
 
 def saturation_8(

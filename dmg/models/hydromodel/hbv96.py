@@ -1,17 +1,17 @@
 import torch
 from typing import Tuple
-from ..marrmot.snowfall import snowfall_2
-from ..marrmot.melt import melt_1
-from ..marrmot.refreeze import refreeze_1
-from ..marrmot.rainfall import rainfall_2
-from ..marrmot.infiltration import infiltration_3
-from ..marrmot.excess import excess_1
-from ..marrmot.capillary import capillary_1
-from ..marrmot.evap import evap_3
-from ..marrmot.recharge import recharge_2
-from ..marrmot.interflow import interflow_2
-from ..marrmot.percolation import percolation_1
-from ..marrmot.baseflow import baseflow_1
+from .flux.snowfall import snowfall_2
+from .flux.melt import melt_1
+from .flux.refreeze import refreeze_1
+from .flux.rainfall import rainfall_2
+from .flux.infiltration import infiltration_3
+from .flux.excess import excess_1
+from .flux.capillary import capillary_1
+from .flux.evap import evap_3
+from .flux.recharge import recharge_2
+from .flux.interflow import interflow_2
+from .flux.percolation import percolation_1
+from .flux.baseflow import baseflow_1
 
 # Parameter range dictionary (matching MARRMoT m_37_hbv_15p_5s)
 HBV96_PARAMS_BOUNDS = {

@@ -70,7 +70,7 @@ class HydroSampler(BaseSampler):
         dataset: dict[str, NDArray[np.float32]],
         ngrid_train: int,
         nt: int,
-    ) -> dict[str, torch.Tensor]:
+    ) -> dict:
         """Generate a training batch."""
         batch_size = self.config['train']['batch_size']
         i_sample, i_t = random_index(ngrid_train, nt, (batch_size, self.rho), warm_up=self.warm_up)
@@ -81,6 +81,7 @@ class HydroSampler(BaseSampler):
             'c_nn_norm': dataset['c_nn_norm'][i_sample],
             'x_nn_norm': self.select_subset(dataset['x_nn_norm'], i_sample, i_t, has_grad=False),
             'xc_nn_norm': self.select_subset(dataset['xc_nn_norm'], i_sample, i_t, has_grad=False),
+            'doy': self.select_subset(dataset['doy'], i_sample, i_t, has_grad=False),
             'target': self.select_subset(dataset['target'], i_sample, i_t)[self.warm_up:, :],
             'batch_sample': i_sample,
         }
@@ -92,9 +93,14 @@ class HydroSampler(BaseSampler):
         i_e: int,
     ) -> dict[str, torch.Tensor]:
         """Generate batch for model forwarding only."""
-        return {
+        val_sample =  {
             key: (
                 value[:, i_s:i_e, :] if value.ndim == 3 else value[i_s:i_e, :]
             ).to(dtype=torch.float32, device=self.device)
             for key, value in dataset.items()
         }
+        indices = torch.arange(i_s, i_e, dtype=torch.long, device=self.device)
+        
+        # 存入字典，Key 建议统一叫 'indices'
+        val_sample['batch_sample'] = indices
+        return val_sample

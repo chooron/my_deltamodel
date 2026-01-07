@@ -1,12 +1,12 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.interception import interception_2
-from ..marrmot.evap import evap_1
-from ..marrmot.saturation import saturation_2
-from ..marrmot.split import split_1
-from ..marrmot.capillary import capillary_2
-from ..marrmot.baseflow import baseflow_1
+from .flux.interception import interception_2
+from .flux.evap import evap_1
+from .flux.saturation import saturation_2
+from .flux.split import split_1
+from .flux.capillary import capillary_2
+from .flux.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_13_hillslope_7p_2s)
 HILLSLOPE_PARAMS_BOUNDS = {

@@ -227,7 +227,7 @@ class BlendHydroV2(nn.Module):
     
     @staticmethod
     def weight_norm(x:torch.Tensor, dim=-1):
-        print("min:", x.min().item(), "max:", x.max().item())
+        # print("min:", x.min().item(), "max:", x.max().item())
         # 1. Softplus 保证非负，且数值与 x 线性相关（不爆炸）
         x = torch.nn.functional.softplus(x)
         

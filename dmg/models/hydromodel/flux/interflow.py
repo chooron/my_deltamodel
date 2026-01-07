@@ -3,17 +3,12 @@ import torch.nn.functional as F
 from .smooth import smooth_threshold_storage_logistic
 
 
-def interflow_1(
-    p1: torch.Tensor,
-    S: torch.Tensor,
-    Smax: torch.Tensor,
-    flux: torch.Tensor,
-    nearzero: float = 1e-6,
-) -> torch.Tensor:
+def interflow_1(p1, S, Smax, flux, nearzero=1e-6):
     """
-    Interflow as a scaled fraction of an incoming flux.
     """
-    return p1 * S / (Smax + nearzero) * flux
+    Smax_safe = torch.clamp(Smax, min=1.0)
+    ratio = torch.clamp(S / Smax_safe, max=1.0)
+    return p1 * ratio * flux
 
 
 def interflow_2(

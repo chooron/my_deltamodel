@@ -1,10 +1,10 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.evap import evap_1
-from ..marrmot.interflow import interflow_8
-from ..marrmot.baseflow import baseflow_1
-from ..marrmot.recharge import recharge_3
+from .flux.evap import evap_1
+from .flux.interflow import interflow_8
+from .flux.baseflow import baseflow_1
+from .flux.recharge import recharge_3
 
 # Parameter range dictionary (based on MARRMoT m_27_tank_12p_4s)
 TANK_PARAMS_BOUNDS = {

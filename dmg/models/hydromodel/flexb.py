@@ -1,11 +1,12 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.saturation import saturation_3
-from ..marrmot.evap import evap_3
-from ..marrmot.percolation import percolation_2
-from ..marrmot.split import split_1
-from ..marrmot.baseflow import baseflow_1
+from .flux.saturation import saturation_3
+from .flux.evap import evap_3
+from .flux.percolation import percolation_2
+from .flux.split import split_1
+from .flux.baseflow import baseflow_1
+from .unithydro import DplTri3
 
 # Parameter range dictionary (based on MARRMoT m_21_flexb_9p_3s)
 FLEXB_PARAMS_BOUNDS = {
@@ -47,6 +48,21 @@ def create_initial_state(
     S2 = torch.zeros((n_grid, nmul), device=device) + nearzero
     S3 = torch.zeros((n_grid, nmul), device=device) + nearzero
     return S1, S2, S3
+
+
+def _route_with_tri3(flux: torch.Tensor, d_base: torch.Tensor) -> torch.Tensor:
+    """Route a single-step flux using the DplTri3 unit hydrograph.
+
+    The unit hydrograph internally normalizes weights; here we flatten the
+    ensemble dimension so each member gets its own delay parameter.
+    """
+    batch, nmul = flux.shape
+    max_lag = int(
+        torch.clamp(torch.ceil(d_base.max()), min=1).detach().cpu().item()
+    )
+    uh = DplTri3(max_lag=max_lag).to(flux.device)
+    routed = uh(flux.view(batch * nmul, 1), d_base.view(batch * nmul))
+    return routed.view(batch, nmul)
 
 
 def flexb_step(
@@ -121,12 +137,9 @@ def flexb_step(
     S1_new = torch.clamp(S1_new, min=nearzero)
 
     # --- 2. Routing Processes (S2 and S3) ---
-
-    # TODO: Unit hydrograph routing (route/uh_) not supported yet for flux_rf and (flux_ps + flux_rs)
-    # nlagf and nlags are thresholds for routing delays.
-    # We assume instantaneous routing for now to maintain consistency with the _step architecture.
-    flux_rfl = flux_rf
-    flux_rsl = flux_ps + flux_rs
+    # Use unit hydrograph (half-triangle) to route fast and slow components.
+    flux_rfl = _route_with_tri3(flux_rf, nlagf)
+    flux_rsl = _route_with_tri3(flux_ps + flux_rs, nlags)
 
     # Fast store process (S2)
     S2_tmp = S2 + flux_rfl

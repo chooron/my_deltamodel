@@ -1,10 +1,10 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.interception import interception_2
-from ..marrmot.evap import evap_1
-from ..marrmot.saturation import saturation_2
-from ..marrmot.baseflow import baseflow_1
+from .flux.interception import interception_2
+from .flux.evap import evap_1
+from .flux.saturation import saturation_2
+from .flux.baseflow import baseflow_1
 
 # 参数取值范围字典 (基于 MARRMoT m_02_wetland_4p_1s)
 WETLAND_PARAMS_BOUNDS = {

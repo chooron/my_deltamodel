@@ -58,7 +58,7 @@ delta_model:
 
   phy_model:
     model: [Unify]
-    model_name: xinanjiang
+    model_name: hbv96
     nmul: 1
     warm_up: 365
     warm_up_states: False

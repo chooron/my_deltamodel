@@ -1,12 +1,12 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.interception import interception_1
-from ..marrmot.evap import evap_1, evap_3
-from ..marrmot.saturation import saturation_3
-from ..marrmot.percolation import percolation_2
-from ..marrmot.split import split_1
-from ..marrmot.baseflow import baseflow_1
+from .flux.interception import interception_1
+from .flux.evap import evap_1, evap_3
+from .flux.saturation import saturation_3
+from .flux.percolation import percolation_2
+from .flux.split import split_1
+from .flux.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_26_flexi_10p_4s)
 FLEXI_PARAMS_BOUNDS = {
@@ -149,7 +149,7 @@ def flexi_step(
 
     # --- 3. Routing Processes (S3 and S4) ---
 
-    # TODO: Unit hydrograph routing (route/uh_) not supported yet
+    # TODO: Inner Routing using DplTri3, using nlagf and nlags as delay parameters
     # Instantaneous routing for flux_rf (fast) and (flux_ps + flux_rs) (slow)
     flux_rfl = flux_rf
     flux_rsl = flux_ps + flux_rs

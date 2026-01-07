@@ -97,7 +97,8 @@ def evap_7(
     """
     Evaporation scaled by relative storage.
     """
-    return torch.minimum(S / (Smax + nearzero) * Ep, S)
+    ratio = torch.clamp(S / Smax, max=1.0)
+    return torch.minimum(ratio * Ep, S)
 
 
 def evap_8(

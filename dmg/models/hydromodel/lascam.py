@@ -1,14 +1,14 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.area import area_1
-from ..marrmot.infiltration import infiltration_5, infiltration_4
-from ..marrmot.interception import interception_5
-from ..marrmot.effective import effective_1
-from ..marrmot.saturation import saturation_11, saturation_12
-from ..marrmot.evap import evap_1, evap_19
-from ..marrmot.recharge import recharge_3, recharge_4
-from ..marrmot.baseflow import baseflow_8
+from .flux.area import area_1
+from .flux.infiltration import infiltration_5, infiltration_4
+from .flux.interception import interception_5
+from .flux.effective import effective_1
+from .flux.saturation import saturation_11, saturation_12
+from .flux.evap import evap_1, evap_19
+from .flux.recharge import recharge_3, recharge_4
+from .flux.baseflow import baseflow_8
 
 # Parameter range dictionary (based on MARRMoT m_23_lascam_24p_3s)
 LASCAM_PARAMS_BOUNDS = {

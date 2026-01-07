@@ -1,12 +1,12 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.effective import effective_1
-from ..marrmot.saturation import saturation_1, saturation_6
-from ..marrmot.infiltration import infiltration_4
-from ..marrmot.evap import evap_13, evap_14
-from ..marrmot.split import split_1
-from ..marrmot.baseflow import baseflow_1
+from .flux.effective import effective_1
+from .flux.saturation import saturation_1, saturation_6
+from .flux.infiltration import infiltration_4
+from .flux.evap import evap_13, evap_14
+from .flux.split import split_1
+from .flux.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_40_smar_8p_6s)
 SMAR_PARAMS_BOUNDS = {

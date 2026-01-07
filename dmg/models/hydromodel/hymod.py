@@ -1,10 +1,10 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.evap import evap_7
-from ..marrmot.saturation import saturation_2
-from ..marrmot.split import split_1
-from ..marrmot.baseflow import baseflow_1
+from .flux.evap import evap_7
+from .flux.saturation import saturation_2
+from .flux.split import split_1
+from .flux.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_29_hymod_5p_5s)
 HYMOD_PARAMS_BOUNDS = {

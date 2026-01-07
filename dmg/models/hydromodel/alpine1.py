@@ -1,12 +1,12 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.snowfall import snowfall_1
-from ..marrmot.rainfall import rainfall_1
-from ..marrmot.melt import melt_1
-from ..marrmot.evap import evap_1
-from ..marrmot.saturation import saturation_1
-from ..marrmot.baseflow import baseflow_1
+from .flux.snowfall import snowfall_1
+from .flux.rainfall import rainfall_1
+from .flux.melt import melt_1
+from .flux.evap import evap_1
+from .flux.saturation import saturation_1
+from .flux.baseflow import baseflow_1
 
 # Parameter range dictionary (based on MARRMoT m_06_alpine1_4p_2s)
 ALPINE1_PARAMS_BOUNDS = {

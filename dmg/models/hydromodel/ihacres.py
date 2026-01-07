@@ -1,9 +1,9 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..marrmot.evap import evap_12
-from ..marrmot.saturation import saturation_5
-from ..marrmot.split import split_1
+from .flux.evap import evap_12
+from .flux.saturation import saturation_5
+from .flux.split import split_1
 
 # Parameter range dictionary (based on MARRMoT m_05_ihacres_7p_1s)
 IHACRES_PARAMS_BOUNDS = {
@@ -11,8 +11,9 @@ IHACRES_PARAMS_BOUNDS = {
     "d": [1.0, 2000.0],  # Threshold for flow generation [mm]
     "p": [0.0, 10.0],  # Flow response non-linearity [-]
     "alpha": [0.0, 1.0],  # Fast/slow flow division [-]
-    "tau_q": [1.0, 700.0],  # Fast flow routing delay [d]
-    "tau_s": [1.0, 700.0],  # Slow flow routing delay [d]
+    "tau_q": [1.0, 15.0],  # Fast flow routing delay [d]
+    "tau_s": [1.0, 15.0],  # Slow flow routing delay [d]
+    "tau_d": [1.0, 15.0],  # Pure time delay of total flow [d] (New)
 }
 
 # Parameter description dictionary
@@ -73,6 +74,9 @@ def ihacres_step(
     flux_u = torch.clamp(flux_u, min=zeros, max=P)
 
     # 3. Flow splitting (Fast/Slow)
+    # uh_q = uh_5_half(tau_q,delta_t);
+    # uh_s = uh_5_half(tau_s,delta_t);
+    # uh_t = uh_8_delay(tau_d,delta_t);
     # TODO: Unit hydrograph routing (route/uh_) not supported yet
     # flux_uq = split_1(alpha, flux_u)
     # flux_us = split_1(1-alpha, flux_u)

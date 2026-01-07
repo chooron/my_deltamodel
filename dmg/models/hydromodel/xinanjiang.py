@@ -2,13 +2,13 @@ import torch
 from typing import Optional, Tuple
 
 # 注意：这里假设你已经创建了对应的核心组件
-from ..marrmot.saturation import saturation_14, saturation_2
-from ..marrmot.interflow import interflow_5
-from ..marrmot.baseflow import baseflow_1
-from ..marrmot.split import split_1, split_2
-from ..marrmot.evap import evap_21
+from .flux.saturation import saturation_14, saturation_2
+from .flux.interflow import interflow_5
+from .flux.baseflow import baseflow_1
+from .flux.split import split_1, split_2
+from .flux.evap import evap_21
 
-# 参数取值范围字典 (基于 MARRMoT m_28_xinanjiang_12p_4s)
+# 参数取值范围字典 (基于 flux m_28_xinanjiang_12p_4s)
 XINANJIANG_PARAMS_BOUNDS = {
     "aim": [0.0, 1.0],
     "par_a": [-0.49, 0.49],

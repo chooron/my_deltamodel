@@ -529,6 +529,22 @@ class MoeLayer(nn.Module):
         # 移动平均层，用于平滑门控系数
         # 使权重在相邻时间步之间过渡更加平滑
         self.moving_avg = MovingAvg(kernel_size=smoothing_k)
+        
+    @staticmethod
+    def weight_norm(x:torch.Tensor, dim=-1):
+        # print("min:", x.min().item(), "max:", x.max().item())
+        # 1. Softplus 保证非负，且数值与 x 线性相关（不爆炸）
+        x = torch.nn.functional.softplus(x)
+        
+        # 2. 计算和
+        s = x.sum(dim=dim, keepdim=True)
+        
+        # 3. 【双重保险】防止所有 logit 极小导致 sum 接近 0
+        # 虽然 softplus > 0，但计算机精度下 softplus(-100) == 0
+        # 加上 clamp 保证分母至少是 1e-6，避免除法得到天文数字
+        s = torch.clamp(s, min=1e-6)
+        
+        return x / s
 
     def forward(self, experts_outputs: torch.Tensor) -> torch.Tensor:
         """
@@ -572,7 +588,7 @@ class MoeLayer(nn.Module):
         # Step 4: Softmax 归一化得到概率分布
         # Softmax(...) in formula (1)
         # 在专家维度 (dim=2) 上进行 softmax，确保权重和为 1
-        gating_weights = F.softmax(gating_smooth, dim=2)  # (B, F, E, S)
+        gating_weights = self.weight_norm(gating_smooth, dim=2)  # (B, F, E, S)
 
         # Step 5: 重排维度并在特征维度上求平均
         # 得到每个专家在每个时间步的综合权重
