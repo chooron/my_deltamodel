@@ -290,7 +290,84 @@ def save_outputs(config, predictions, y_obs=None, create_dirs=False) -> None:
             item_obs = y_obs[:, :, config['train']['target'].index(var)]
             file_name = var + '_obs.npy'
             np.save(os.path.join(config['out_path'], file_name), item_obs)
+            
 
+def save_outputsv2(config, predictions, y_obs=None, create_dirs=False) -> None:
+    """
+    Save ALL outputs into ONE compressed .npz file.
+    Concatenates batches along dim=1 (Basin/Batch dimension) for time-series data.
+    """
+    if torch.is_tensor(y_obs):
+        y_obs = y_obs.cpu().numpy()
+
+    if create_dirs:
+        out_path_builder = PathBuilder(config)
+        out_path_builder.write_path(config)
+
+    save_dir = config['out_path']
+    master_dict = {}
+
+    # --- 内部辅助函数：处理 list[dict] 形式的 batch 拼接 ---
+    def process_batch_list(batch_list, prefix=""):
+        # 1. 获取所有变量名 (如 'streamflow', 'storage_sum')
+        # 假设所有 batch 的 keys 是一样的，取第一个 batch 的 keys
+        keys = batch_list[0].keys()
+
+        for key in keys:
+            # 2. 收集该变量的所有 batch 数据
+            # list_of_tensors: [Tensor(Time, B1), Tensor(Time, B2), ...]
+            list_of_tensors = [d[key] for d in batch_list]
+            
+            # 3. 确定拼接维度
+            # 用户指定：shape 为 (Time, Basin) 时，Batch 维在 dim=1
+            # 通常水文模型输出：
+            # (Time, Batch) -> dim=1
+            # (Time, Batch, Features) -> dim=1
+            # 只有当形状是 (Batch, Features) 这种静态属性时才是 dim=0，
+            # 但既然 key 是 streamflow/storage 等时序数据，这里统一用 dim=1
+            
+            # 简单的维度判断逻辑：
+            sample_shape = list_of_tensors[0].shape
+            if len(sample_shape) >= 2:
+                # 无论是 (T, B) 还是 (T, B, F)，Batch 都在 1
+                cat_dim = 1
+            else:
+                # 极少见的情况 (Batch,)
+                cat_dim = 0
+            
+            # 4. 执行拼接
+            try:
+                c_tensor = torch.cat(list_of_tensors, dim=cat_dim)
+            except RuntimeError as e:
+                # 容错：万一遇到维度不匹配（比如最后一个batch时间长度不对），打印报错
+                print(f"Error concatenating {key}: {e}")
+                continue
+
+            # 5. 生成 npz 的 Key
+            # 如果有 prefix (模型名)，则为 "model_key"，否则直接 "key"
+            npz_key = f"{prefix}_{key}" if prefix else key
+            
+            # 6. 存入字典 (转为 numpy)
+            master_dict[npz_key] = c_tensor.cpu().numpy()
+
+    # --- 主逻辑分支 ---
+
+    # Case 1: 单模型 (predictions 是 list[dict])
+    if isinstance(predictions, list):
+        process_batch_list(predictions)
+
+    # Case 2: 多模型 (predictions 是 dict[str, list[dict]])
+    elif isinstance(predictions, dict):
+        for model_name, batch_list in predictions.items():
+            process_batch_list(batch_list, prefix=model_name)
+
+    else:
+        raise ValueError("Invalid output format. Expected list or dict.")
+
+    # --- 保存 ---
+    file_path = os.path.join(save_dir, "model_outputs.npz")
+    np.savez_compressed(file_path, **master_dict)
+    
 
 def load_model(config, model_name, epoch):
     """Load trained PyTorch models.

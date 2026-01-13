@@ -19,7 +19,7 @@ from dmg.models.hydromodel.unithydro.base import DplUHBase
 class DplGamma6(DplUHBase):
     """
     Gamma Unit Hydrograph (Nash Cascade)
-    基于用户提供的 lgamma PDF 逻辑实现，适配 Grouped Conv1d。
+    适配新的 DplUHBase (Base类已处理 t=0.5 起点和归一化)
     """
 
     def get_weights(self, params):
@@ -28,29 +28,25 @@ class DplGamma6(DplUHBase):
         n (alpha): Shape parameter
         k (theta): Scale parameter
         """
-        # 1. 提取参数 (Batch, 1)
-        # 确保维度是 (Batch, 1, 1) 以便与时间轴 (1, 1, L) 广播
-        n = params[:, 0:1].unsqueeze(-1)  # shape: (Batch, 1, 1)
-        k = params[:, 1:2].unsqueeze(-1)  # shape: (Batch, 1, 1)
+        # 1. 提取参数 (Batch, 1, 1)
+        n = params[:, 0:1].unsqueeze(-1) 
+        k = params[:, 1:2].unsqueeze(-1) 
 
-        # 2. 参数安全处理 (参考你的 uh_gamma 逻辑)
+        # 2. 参数安全处理
         # alpha对应 n, theta对应 k
-        # 你的逻辑: F.relu(a) + 0.1
+        # 保持你原有的 ReLU + epsilon 逻辑
         alpha = F.relu(n) + 0.1
         theta = F.relu(k) + 0.5
 
         # 3. 时间轴 t
-        # self.t_idx 是基类注册的 buffer, shape (1, 1, MaxLag)
-        # 你的逻辑用的是 t = arange(0.5, lenF*1.0)，我们也用这个中心点逻辑
-        t = self.t_idx.to(
-            alpha.device
-        )  # t_idx 是 1, 2, 3... -> 0.5, 1.5, 2.5...
-
-        t = t - torch.ones_like(t) * 0.5
-        # 4. 计算 Gamma PDF 权重 (无需循环，直接广播)
-        # 公式: (1 / (Gamma(alpha) * theta^alpha)) * t^(alpha-1) * exp(-t/theta)
-
-        # log空间计算避免溢出: denom = lgamma(alpha) + alpha * log(theta)
+        # 【修改点 1】：直接使用 base 的 t_idx
+        # Base 类现在已经是 [0.5, 1.5, 2.5...]，不需要再减 0.5 了
+        t = self.t_idx.to(alpha.device) 
+        
+        # 4. 计算 Gamma PDF 权重
+        # log空间计算避免溢出
+        
+        # log_denom = lgamma(alpha) + alpha * log(theta)
         log_denom = torch.lgamma(alpha) + alpha * torch.log(theta)
 
         # log_num = (alpha - 1) * log(t) - t / theta
@@ -59,15 +55,6 @@ class DplGamma6(DplUHBase):
         # log_w = log_num - log_denom
         log_w = log_num - log_denom
         w = torch.exp(log_w)
-
-        # 此时 w 的形状已经是 (Batch, 1, MaxLag)
-        # 满足 F.conv1d(groups=Batch) 对权重的要求 [Groups, In_channels/Groups, Kernel]
-        # 即 [Batch, 1, Length]
-
-        # 5. 归一化
-        # 基类 DplUHBase 的 forward 会再做一次归一化，
-        # 但在这里先做一次可以保证数值稳定性
-        w = w / (w.sum(dim=-1, keepdim=True) + 1e-8)
 
         return w
 
@@ -279,8 +266,12 @@ def _smar_production_step_impl(
     )
 
 
-# Compile
-_smar_production_step = torch.compile(_smar_production_step_impl)
+def _maybe_compile(fn, backend: str):
+    if backend == "compile" and hasattr(torch, "compile"):
+        return torch.compile(fn)
+    if backend == "jit":
+        return torch.jit.script(fn)
+    return fn
 
 
 # ==============================================================================
@@ -312,6 +303,7 @@ class Smar(UnifyV2):
         # Initialize Unit Hydrograph (Gamma / Nash Cascade)
         # Using bounds of nk_delay to define max lag
         self.uh = DplGamma6(max_lag=int(SMAR_PARAMS_BOUNDS["nk_delay"][1]))
+        self.production_step = _maybe_compile(_smar_production_step_impl, self.backend)
 
     def _init_states(self, n_grid: int) -> Tuple[torch.Tensor, ...]:
         # Initialize 6 states
@@ -325,7 +317,6 @@ class Smar(UnifyV2):
         self,
         x_dict: dict,
         states: Tuple[torch.Tensor, ...],
-        dy_params: Dict[str, torch.Tensor],
         static_params: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
         forcing = x_dict['x_phy']
@@ -351,6 +342,27 @@ class Smar(UnifyV2):
 
         S1, S2, S3, S4, S5, S6 = states
 
+        track_balance = self.check_water_balance
+        if track_balance:
+            Et_out = torch.empty(
+                (n_steps, n_grid, nmul), device=self.device, dtype=torch.float32
+            )
+            state_series: Optional[List[torch.Tensor]] = [
+                torch.empty(
+                    (n_steps + 1, n_grid, nmul),
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                for _ in range(6)
+            ]
+            for idx, state in enumerate(states):
+                state_series[idx][0] = state
+            S_init_sum = torch.stack([s.clone() for s in states]).sum(dim=0)
+        else:
+            Et_out = None
+            state_series = None
+            S_init_sum = None
+
         # ==========================================================
         # Phase 1: Production Loop
         # ==========================================================
@@ -360,7 +372,7 @@ class Smar(UnifyV2):
 
         for t in range(n_steps):
             flux_qr_in, flux_qg, flux_ea, S1, S2, S3, S4, S5, S6 = (
-                _smar_production_step(
+                self.production_step(
                     P_seq[t],
                     PET_seq[t],
                     S1,
@@ -380,7 +392,14 @@ class Smar(UnifyV2):
             )
             raw_qr_list.append(flux_qr_in)
             raw_qg_list.append(flux_qg)
-            # ea_list.append(flux_ea)
+            if track_balance:
+                Et_out[t] = flux_ea
+                state_series[0][t + 1] = S1
+                state_series[1][t + 1] = S2
+                state_series[2][t + 1] = S3
+                state_series[3][t + 1] = S4
+                state_series[4][t + 1] = S5
+                state_series[5][t + 1] = S6
 
         # Stack: (T, B, M)
         qr_stack = torch.stack(raw_qr_list, dim=0)
@@ -415,11 +434,15 @@ class Smar(UnifyV2):
         # ==========================================================
         # Q = Routed Surface + Baseflow
         Qsim_out = routed_qr + qg_stack
+        final_states = (S1, S2, S3, S4, S5, S6)
 
-        # ==========================================================
-        # Finalize
-        # ==========================================================
-        if self.initialize:
-            return (S1, S2, S3, S4, S5, S6)
+        if track_balance:
+            return self._finalize_output(
+                Qsim_out,
+                Et_out,
+                S_init_sum,
+                final_states,
+                state_series,
+            )
 
         return self._finalize_output(Qsim_out)

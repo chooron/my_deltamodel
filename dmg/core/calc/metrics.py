@@ -48,6 +48,7 @@ class Metrics(BaseModel):
 
     kge: NDArray[np.float32] = np.ndarray([])
     kge_12: NDArray[np.float32] = np.ndarray([])
+    inv_kge: NDArray[np.float32] = np.ndarray([])
 
     rmse_low: NDArray[np.float32] = np.ndarray([])
     rmse_mid: NDArray[np.float32] = np.ndarray([])
@@ -108,6 +109,7 @@ class Metrics(BaseModel):
 
         self.kge = np.full(self.ngrid, np.nan)
         self.kge_12 = np.full(self.ngrid, np.nan)
+        self.inv_kge = np.full(self.ngrid, np.nan)
 
         self.rmse_low = np.full(self.ngrid, np.nan)
         self.rmse_mid = np.full(self.ngrid, np.nan)
@@ -175,6 +177,7 @@ class Metrics(BaseModel):
                     self.kge_12[i] = self._kge_12(
                         _pred_mean, _target_mean, _pred_std, _target_std, self.corr[i],
                     )
+                    self.inv_kge[i] = self._inv_kge(pred, target)
 
                     self.nse[i] = self.r2[i] = self._nse_r2(pred, target, _target_mean)
 
@@ -484,6 +487,52 @@ class Metrics(BaseModel):
             + (pred_mean / target_mean - 1) ** 2,
         )
         return kge_12
+
+    @staticmethod
+    def _inv_kge(
+        pred: NDArray[np.float32],
+        target: NDArray[np.float32],
+        stability_eps: float = 1e-6,
+    ) -> np.float32:
+        """Calculate inverse KGE following the inverse-flow formulation.
+
+        Steps mirror KgeInverseLoss:
+        - epsilon = max(0.01 * mean(target), 1e-3)
+        - transform: 1 / (flow + epsilon)
+        - apply standard KGE on transformed values with small stability eps
+        """
+
+        if pred.size == 0 or target.size == 0:
+            return np.nan
+
+        # clamp to non-negative for safety
+        pred_safe = np.clip(pred, a_min=0.0, a_max=None)
+        target_safe = np.clip(target, a_min=0.0, a_max=None)
+
+        eps_dyn = max(0.01 * float(np.mean(target_safe)), 1e-3)
+
+        pred_inv = 1.0 / (pred_safe + eps_dyn)
+        target_inv = 1.0 / (target_safe + eps_dyn)
+
+        if pred_inv.size < 2:
+            return np.nan
+
+        mean_p = float(np.mean(pred_inv))
+        mean_t = float(np.mean(target_inv))
+        std_p = float(np.std(pred_inv))
+        std_t = float(np.std(target_inv))
+
+        dev_p = pred_inv - mean_p
+        dev_t = target_inv - mean_t
+        numerator = float(np.sum(dev_p * dev_t))
+        denom = float(np.sqrt(np.sum(dev_p ** 2)) * np.sqrt(np.sum(dev_t ** 2)) + stability_eps)
+        r = numerator / denom if denom != 0 else 0.0
+
+        beta = mean_p / (mean_t + stability_eps)
+        gamma = std_p / (std_t + stability_eps)
+
+        inv_kge = 1.0 - np.sqrt((r - 1.0) ** 2 + (beta - 1.0) ** 2 + (gamma - 1.0) ** 2)
+        return inv_kge
 
     @staticmethod
     def _nse_r2(

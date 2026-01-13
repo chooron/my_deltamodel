@@ -16,31 +16,31 @@ from dmg.core.utils import (  # noqa: E402
     set_randomseed,
 )
 from project.diff_compare import load_config  # noqa: E402
-from dmg.models.hydromodel import STFN_INFO
+from dmg.models.phy_models.core import STFN_INFO # noqa: E402
 
 AVAILABLE_MODELs = list(STFN_INFO.keys())
 SPECIAL_MODELS = [
-    "hbv96",
-    "xinanjiang",
-    "alpine1",
-    "alpine2",
-    "australia",
-    "collie1",
-    "collie2",
-    "collie3",
-    "gsfb",
-    "hymod",
-    "modhydrolog", # TODO 训练有问题，需要重跑
-    "mopex1",
-    "mopex2",
-    "mopex3",
-    "newzealand1",
-    "tcm", # TODO 训练有问题，精度下不去
+    # "hbv96",
+    # "xinanjiang",
+    # "alpine1",
+    # "alpine2",
+    # "australia",
+    # "collie1",
+    # "collie2",
+    # "collie3",
+    # "gsfb",
+    # "hymod",
+    # "modhydrolog",
+    # "mopex1",
+    # "mopex2",
+    # "mopex3",
+    # "newzealand1",
+    # "tcm",
     
     "flexi",
     "flexb",
     "flexis",
-    "gr4j",
+    "gr4j", # TODO 模型率定过程无异常，但是在预测结果中有显著的偏差
     "hillslope",
     "ihacres", # TODO 模型率定过程无异常，但是在预测结果中有显著的偏差
     "mopex4",
@@ -130,5 +130,59 @@ if __name__=='__main__':
     #     if nm not in SPECIAL_MODELS:
     #         print(f"calibrate {nm} model")
     #         main(nm)
-    for model in ['wetland']:
-        main(model)
+    # # for model in ['xinanjiang']:
+    # #     main(model)
+    import traceback  # 用于获取详细报错信息
+
+
+    failed_models = []  # 1. 初始化一个列表用于存储异常记录
+
+    print(f"{'='*20} Batch Calibration Start {'='*20}")
+
+    # for nm in AVAILABLE_MODELs:
+    for nm in ['mopex1', 'mopex2', 'mopex3']:
+        if nm not in SPECIAL_MODELS:
+            print(f"\n[Processing] Calibrating {nm} model...")
+            
+            try:
+                # 2. 尝试运行主逻辑
+                main(nm)
+                print(f"[Success] {nm} finished.")
+            except Exception as e:
+                # 3. 捕获任何异常 (Exception)
+                error_message = str(e)
+                error_trace = traceback.format_exc()  # 获取完整的报错堆栈字符串
+                
+                print(f"!! [ERROR] Failed to calibrate {nm}. Skipping to next.")
+                print(f"!! Reason: {error_message}")
+                
+                # 4. 记录错误模型及其原因
+                failed_models.append({
+                    "model": nm,
+                    "error": error_message,
+                    "traceback": error_trace
+                })
+                
+                # 5. 继续循环 (continue 其实可以省略，因为 except 结束后自然会进入下一次循环，但写上更清晰)
+                continue
+
+    # ==========================================================
+    # 6. 运行结束后生成总结报告
+    # ==========================================================
+    print("\n" + "="*50)
+    print("             FINAL EXECUTION REPORT")
+    print("="*50)
+
+    if len(failed_models) == 0:
+        print("✅ All models calibrated successfully!")
+    else:
+        print(f"⚠️  Completed with {len(failed_models)} failures.\n")
+        print("Failed Models List:")
+        for i, item in enumerate(failed_models, 1):
+            print(f"{i}. {item['model']}")
+            print(f"   Error: {item['error']}")
+            # 如果你想在最后看详细堆栈，可以取消下面这行的注释
+            # print(f"   Details:\n{item['traceback']}")
+            print("-" * 30)
+
+    print("="*50)

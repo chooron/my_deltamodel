@@ -243,6 +243,7 @@ class HydroLoader(BaseLoader):
             with open(datav2_path, "rb") as f:
                 forcings = pickle.load(f)["forcing"]
 
+        all_forcings = np.transpose(forcings, (1, 0, 2))
         forcings = np.transpose(forcings[:, idx_start:idx_end], (1, 0, 2))
 
         # Forcing subset for phy model
@@ -285,6 +286,7 @@ class HydroLoader(BaseLoader):
         c_phy = attributes[:, phy_attr_idx]
         x_nn = forcings[:, :, nn_forc_idx]
         c_nn = attributes[:, nn_attr_idx]
+        all_target = np.transpose(target, (1, 0, 2))
         target = np.transpose(target[:, idx_start:idx_end], (1, 0, 2))
         gage_info = np.load(
             os.path.join(os.getenv("DATA_PATH", "."), "gage_id.npy")
@@ -315,6 +317,8 @@ class HydroLoader(BaseLoader):
 
         # Convert flow to mm/day if necessary
         target = self._flow_conversion(c_nn, target)
+        all_target = self._flow_conversion(c_nn, all_target[:, subset_idx, :])
+        # np.savez("forcing.npz", forcing=all_forcings[:, subset_idx, :], target=all_target)
 
         return x_phy, c_phy, x_nn, c_nn, select_time_doy, target
 

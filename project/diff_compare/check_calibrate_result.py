@@ -1,15 +1,23 @@
 import json
 import numpy as np
 
-model_name = 'vic'
+model_name = "Flexb"
+loss = "KgeLoss"
 train_dir = "test1989-1998"
 test_dir = "test1999-2009"
-base_dir = "/workspace/my_deltamodel/project/diff_compare/output/camels_559/train1989-1998/no_multi/Calibrate_E50_R365_B100_n16_noLn_noWU_42"
-train_path = rf"{base_dir}/{model_name}/KgeLoss/stat/{train_dir}_Ep50/metrics.json"
-test_path = rf"{base_dir}/{model_name}/KgeLoss/stat/{test_dir}_Ep50/metrics.json"
+base_dir = (
+    "/workspace/my_deltamodel/project/diff_compare/output/camels_559/"
+    + "train1989-1998/no_multi/Calibrate_E50_R365_B100_n16_noLn_noWU_42"
+)
+train_path = (
+    rf"{base_dir}/{model_name}/{loss}/stat/{train_dir}_Ep50/metrics.json"
+)
+test_path = rf"{base_dir}/{model_name}/{loss}/stat/{test_dir}_Ep50/metrics.json"
 
 
-def load_metric_array(json_path: str, key: str = "kge", n_basins: int = 559, n_members: int = 16) -> np.ndarray:
+def load_metric_array(
+    json_path: str, key: str = "kge", n_basins: int = 559, n_members: int = 16
+) -> np.ndarray:
     """Load JSON metrics and reshape to (n_basins, n_members)."""
     with open(json_path, "r", encoding="utf-8") as f:
         raw = f.read()
@@ -26,7 +34,9 @@ def load_metric_array(json_path: str, key: str = "kge", n_basins: int = 559, n_m
     arr = np.array(data[key], dtype=float)
     expected = n_basins * n_members
     if arr.size != expected:
-        raise ValueError(f"数据长度为 {arr.size}，无法 reshape 为 {n_basins}×{n_members}")
+        raise ValueError(
+            f"数据长度为 {arr.size}，无法 reshape 为 {n_basins}×{n_members}"
+        )
     return arr.reshape(n_members, n_basins).T
 
 

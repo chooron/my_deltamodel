@@ -50,16 +50,16 @@ delta_model:
     - pet
     hidden_size: 64
     model: Calibrate
-    num_start: 10
   phy_model:
     attributes: []
+    directory: /workspace/my_deltamodel/dmg/models/phy_models/specialv2
     dy_drop: 0.0
     forcings:
     - prcp
     - tmean
     - pet
     model:
-    - Ihacres
+    - Flexi
     nearzero: 1e-6
     nmul: 16
     use_log_norm: []

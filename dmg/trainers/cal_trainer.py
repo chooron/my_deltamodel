@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 from dmg.core.calc.metrics import Metrics
 from dmg.core.data import create_training_grid, create_dl_training_grid
 from dmg.core.utils.factory import import_data_sampler, load_criterion
-from dmg.core.utils.utils import save_outputs, save_train_state
+from dmg.core.utils.utils import save_outputs, save_outputsv2, save_train_state
 from dmg.models.model_handler import ModelHandler
 from dmg.trainers.base import BaseTrainer
 
@@ -309,6 +309,12 @@ class CalTrainer(BaseTrainer):
 
             # Loss 计算 (此时 Target 和 Prediction 的 Batch 维度已对齐)
             loss = self.model.calc_loss(dataset_sample)
+            
+            if torch.isnan(loss):
+                print(f"\n[Error] Epoch {epoch}, Batch {mb}: Loss is NaN!")
+                # 如果你想看更详细的信息，可以打印当前的 model 参数或其他信息
+                # print(f"Current Parameters: ...") 
+                raise ValueError("Training stopped: Loss became NaN.")
 
             loss.backward()
 
@@ -387,7 +393,7 @@ class CalTrainer(BaseTrainer):
         # Save predictions and calculate metrics
         # 现在的 observations 和 batch_predictions 长度都是 N*16，完全匹配，直接保存即可
         log.info("Saving model outputs + Calculating metrics")
-        save_outputs(self.config, batch_predictions, observations, create_dirs=True)
+        save_outputsv2(self.config, batch_predictions, observations, create_dirs=True)
         self.predictions = self._batch_data(batch_predictions)
 
         # Calculate metrics

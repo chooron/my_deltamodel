@@ -52,6 +52,7 @@ delta_model:
     model: Calibrate
   phy_model:
     attributes: []
+    check_water_balance: true
     dy_drop: 0.0
     forcings:
     - prcp
@@ -59,7 +60,7 @@ delta_model:
     - pet
     model:
     - UnifyV2
-    model_name: wetland
+    model_name: mopex1
     nearzero: 1e-6
     nmul: 16
     use_log_norm: []
