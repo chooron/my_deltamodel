@@ -62,7 +62,7 @@ delta_model:
     - UnifyV2
     model_name: tcm
     nearzero: 1e-6
-    nmul: 16
+    nmul: 128
     use_log_norm: []
     warm_up: 365
     warm_up_states: false
@@ -83,18 +83,18 @@ test:
   end_time: 2009/12/31
   split_dataset: false
   start_time: 1999/01/01
-  test_epoch: 50
+  test_epoch: 100
 train:
   batch_size: 100
   end_time: 1998/12/31
-  epochs: 50
+  epochs: 100
   learning_rate: 1.0
   lr_scheduler: None
   lr_scheduler_params:
     gamma: 0.5
     step_size: 10
   optimizer: Adadelta
-  save_epoch: 10
+  save_epoch: 50
   start_epoch: 0
   start_time: 1989/01/01
   target:
