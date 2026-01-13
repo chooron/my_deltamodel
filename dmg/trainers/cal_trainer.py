@@ -306,16 +306,18 @@ class CalTrainer(BaseTrainer):
 
             # Loss 计算
             loss = self.model.calc_loss(dataset_sample)
-            
+
             # ============================================================
             # [修改 1] Loss NaN 保护：跳过当前 Batch 而不是报错
             # ============================================================
             if torch.isnan(loss) or torch.isinf(loss):
                 if self.verbose:
-                    tqdm.tqdm.write(f"[Warning] Batch {mb}: Loss is NaN/Inf. Skipping this batch.")
+                    tqdm.tqdm.write(
+                        f"[Warning] Batch {mb}: Loss is NaN/Inf. Skipping this batch."
+                    )
                 self.optimizer.zero_grad()
-                continue # 直接跳过，不进行 backward，保护模型不崩
-            
+                continue  # 直接跳过，不进行 backward，保护模型不崩
+
             # 反向传播
             loss.backward()
 
@@ -327,7 +329,9 @@ class CalTrainer(BaseTrainer):
             for param in self.model.get_parameters():
                 if param.grad is not None:
                     # 原地修改梯度：NaN -> 0, 正无穷 -> 1, 负无穷 -> -1 (数值可根据需要调整)
-                    torch.nan_to_num_(param.grad, nan=0.0, posinf=1.0, neginf=-1.0)
+                    torch.nan_to_num_(
+                        param.grad, nan=0.0, posinf=1.0, neginf=-1.0
+                    )
 
             # 梯度裁剪 (保持原有逻辑)
             torch.nn.utils.clip_grad_norm_(
@@ -340,15 +344,18 @@ class CalTrainer(BaseTrainer):
             self.total_loss += loss.item()
 
             if self.verbose:
-                tqdm.tqdm.write(
-                    f"Epoch {epoch}, batch {mb} | loss: {loss.item()}"
-                )
+                if epoch % 10 == 0:
+                    tqdm.tqdm.write(
+                        f"Epoch {epoch}, batch {mb} | loss: {loss.item() / nmul}"
+                    )
 
         if self.use_scheduler:
             self.scheduler.step()
 
         if self.verbose:
-            log.info(f"\n ---- \n Epoch {epoch} total loss: {self.total_loss / (nmul)}")
+            log.info(
+                f"\n ---- \n Epoch {epoch} total loss: {self.total_loss / (nmul)}"
+            )
         self._log_epoch_stats(
             epoch, self.model.loss_dict, n_minibatch, start_time
         )
@@ -369,11 +376,11 @@ class CalTrainer(BaseTrainer):
         self.is_in_train = False
 
         # 1. 获取 Multi-Start 的倍数 (从配置读取, 默认为 1)
-        nmul = self.config['delta_model']['phy_model'].get('nmul', 16)
+        nmul = self.config["delta_model"]["phy_model"].get("nmul", 16)
 
         # Track overall predictions and observations
         batch_predictions = []
-        observations = self.eval_dataset['target']
+        observations = self.eval_dataset["target"]
 
         # ============================================================
         # [核心修改] 如果是 Multi-Start，把观测数据也复制扩展，跟预测数据对齐
@@ -386,21 +393,25 @@ class CalTrainer(BaseTrainer):
         # ============================================================
 
         # Get start and end indices for each batch
-        n_samples = self.eval_dataset['xc_nn_norm'].shape[1]
-        batch_start = np.arange(0, n_samples, self.config['test']['batch_size'])
+        n_samples = self.eval_dataset["xc_nn_norm"].shape[1]
+        batch_start = np.arange(0, n_samples, self.config["test"]["batch_size"])
         batch_end = np.append(batch_start[1:], n_samples)
 
         # Model forward
         # _forward_loop 内部已经在 _run_model 里做了扩展，
         # 所以出来的 batch_predictions 已经是 [Batch*nmul, Time] 的形状了
         log.info(f"Validating Model: Forwarding {len(batch_start)} batches")
-        batch_predictions = self._forward_loop(self.eval_dataset, batch_start, batch_end)
+        batch_predictions = self._forward_loop(
+            self.eval_dataset, batch_start, batch_end
+        )
 
         # Save predictions and calculate metrics
         # 现在的 observations 和 batch_predictions 长度都是 N*16，完全匹配，直接保存即可
         log.info("Saving model outputs + Calculating metrics")
         if self.config.get("save_output", False):
-            save_outputsv2(self.config, batch_predictions, observations, create_dirs=True)
+            save_outputsv2(
+                self.config, batch_predictions, observations, create_dirs=True
+            )
         self.predictions = self._batch_data(batch_predictions)
 
         # Calculate metrics
