@@ -293,65 +293,43 @@ class CalTrainer(BaseTrainer):
             )
 
             # ============================================================
-            # [Multi-Start Target 复制]
+            # [核心修改] 仅在 Multi-Start 时对 Target 进行复制
             # ============================================================
             if nmul > 1:
-                dataset_sample["target"] = dataset_sample["target"].repeat_interleave(nmul, dim=1)
+                dataset_sample["target"] = dataset_sample[
+                    "target"
+                ].repeat_interleave(nmul, dim=1)
+            # ============================================================
 
-            # ============================================================
-            # 1. Forward pass
-            # ============================================================
-            # 注意：确保 model forward 后会将预测结果写入 dataset_sample (例如 key 为 'prediction' 或 'q_sim')
-            _ = self.model(dataset_sample) 
+            # Forward pass through model.
+            _ = self.model(dataset_sample)
 
+            # Loss 计算
+            loss = self.model.calc_loss(dataset_sample)
+            
             # ============================================================
-            # [核心修改] 2. 安全 Loss 计算 (Loss Masking)
+            # [修改 1] Loss NaN 保护：跳过当前 Batch 而不是报错
             # ============================================================
-            # 这里的目的是：计算每个样本的 Loss，剔除 NaN，只对“存活”的样本计算梯度
-            
-            # A. 获取预测值和目标值 (请根据你模型的实际 Key 修改这里，例如 'q_sim')
-            # 假设 model.calc_loss 内部是基于 dataset_sample 里的某些 key 计算的
-            # 我们这里手动计算 element-wise loss 以便进行筛选
-            pred = dataset_sample.get('prediction') # <--- 请确认这里的 Key !!!
-            target = dataset_sample['target']
-            
-            # 备用方案：如果不知道 Key，可以尝试让 model 返回未 reduce 的 loss
-            # loss_element_wise = self.model.calc_loss(dataset_sample, reduction='none')
-
-            # 这里演示手动计算 MSE Loss 作为示例 (根据你的实际 Loss 修改，如 NSE)
-            # Shape: [Batch, Time] 或 [Batch, Mul, Time] -> [Batch * Mul]
-            loss_per_sample = torch.mean((pred - target) ** 2, dim=-1) # 对时间维求均值
-            
-            # B. 生成掩码：标记 Loss 为有限值 (非 NaN, 非 Inf) 的样本
-            valid_mask = torch.isfinite(loss_per_sample)
-            num_valid = valid_mask.sum().item()
-            total_samples = loss_per_sample.numel()
-            
-            # C. 决策分支
-            if num_valid == 0:
-                # 情况 1: 全军覆没
-                # 这一批次所有参数都导致了 NaN，直接跳过，不更新梯度
-                # 这样可以避免 "Training stopped" 报错，让模型有机会在下一个 Batch 恢复
+            if torch.isnan(loss) or torch.isinf(loss):
                 if self.verbose:
-                    tqdm.tqdm.write(f"[Warning] Batch {mb}: All {total_samples} samples are NaN. Skipping step.")
+                    tqdm.tqdm.write(f"[Warning] Batch {mb}: Loss is NaN/Inf. Skipping this batch.")
                 self.optimizer.zero_grad()
-                continue # 跳过本轮循环，不进行 backward
-            else:
-                # 情况 2: 部分存活 或 全部存活
-                # 只对有效的样本求平均 Loss
-                # 这样 NaN 的样本对应的参数梯度为 0 (不更新)，好的参数正常更新
-                loss = loss_per_sample[valid_mask].mean()
-                
-                # (可选) 如果存活率太低，打印警告
-                if num_valid < total_samples and self.verbose:
-                    tqdm.tqdm.write(f"[Info] Batch {mb}: {total_samples - num_valid}/{total_samples} samples masked due to NaN.")
-
-            # ============================================================
-            # 3. Backward & Optimize
-            # ============================================================
+                continue # 直接跳过，不进行 backward，保护模型不崩
+            
+            # 反向传播
             loss.backward()
 
-            # 梯度裁剪 (保持你原有的逻辑)
+            # ============================================================
+            # [修改 2] 梯度 NaN 保护 (即你想要的 nan_to_num)
+            # ============================================================
+            # 遍历所有参数的梯度，将 NaN 替换为 0，防止“一颗老鼠屎坏了一锅粥”
+            # 这样坏掉的参数（梯度为NaN）不会更新，好的参数（梯度正常）继续优化
+            for param in self.model.get_parameters():
+                if param.grad is not None:
+                    # 原地修改梯度：NaN -> 0, 正无穷 -> 1, 负无穷 -> -1 (数值可根据需要调整)
+                    torch.nan_to_num_(param.grad, nan=0.0, posinf=1.0, neginf=-1.0)
+
+            # 梯度裁剪 (保持原有逻辑)
             torch.nn.utils.clip_grad_norm_(
                 self.model.get_parameters(), max_norm=1.0
             )
@@ -363,13 +341,14 @@ class CalTrainer(BaseTrainer):
 
             if self.verbose:
                 tqdm.tqdm.write(
-                    f"Epoch {epoch}, batch {mb} | loss: {loss.item():.4f} | valid: {num_valid}/{total_samples}"
+                    f"Epoch {epoch}, batch {mb} | loss: {loss.item()}"
                 )
+
         if self.use_scheduler:
             self.scheduler.step()
 
         if self.verbose:
-            log.info(f"\n ---- \n Epoch {epoch} total loss: {self.total_loss}")
+            log.info(f"\n ---- \n Epoch {epoch} total loss: {self.total_loss / (nmul)}")
         self._log_epoch_stats(
             epoch, self.model.loss_dict, n_minibatch, start_time
         )
