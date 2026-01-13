@@ -57,14 +57,13 @@ class TestAllModelsGradient(unittest.TestCase):
         核心测试逻辑：遍历所有注册的模型并进行梯度检查
         """
         # 获取所有模型名称
-        model_names = ['mopex4','mopex5']
-        # model_names = list(PARAM_INFO.keys())
+        # model_names = ['mopex4','mopex5']
+        model_names = list(PARAM_INFO.keys())
         print(f"\n🚀 Starting Batch Gradient Check for {len(model_names)} models...")
         
         failed_models = []
         
         for model_name in model_names:
-            # if model_name not in SPECIAL_MODELS:
             print(f"\n[Testing] Model: {model_name} ...", end=" ", flush=True)
             try:
                 self.run_single_model_check(model_name)

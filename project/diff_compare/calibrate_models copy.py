@@ -82,7 +82,7 @@ def main(model_name):
 
     # model evaluation
     config["mode"] = "test"
-    config["test"]["test_epoch"] = 50
+    config["test"]["test_epoch"] = 10
     set_randomseed(config["random_seed"])
 
     model = ModelHandler(config, verbose=True)
@@ -140,7 +140,8 @@ if __name__=='__main__':
     print(f"{'='*20} Batch Calibration Start {'='*20}")
 
     # for nm in AVAILABLE_MODELs:
-    for nm in SPECIAL_MODELS:
+    # for nm in SPECIAL_MODELS:
+    for nm in ['ihacres']:
         if nm not in ['mopex4', 'mopex5']:
             print(f"\n[Processing] Calibrating {nm} model...")
             

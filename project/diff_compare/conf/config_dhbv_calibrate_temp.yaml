@@ -60,7 +60,7 @@ delta_model:
     - pet
     model:
     - UnifyV2
-    model_name: flexi
+    model_name: ihacres
     nearzero: 1e-6
     nmul: 16
     use_log_norm: []

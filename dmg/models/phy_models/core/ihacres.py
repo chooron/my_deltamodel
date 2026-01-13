@@ -73,23 +73,36 @@ def ihacres_step(
     Software, 19(1), 1-5.
     """
 
-    # 1. Evapotranspiration from deficit store (linear stress)
+    # 1. 蒸发 (让亏缺变大)
     flux_ea = evap_linear_deficit(S1, lp, PET, nearzero=nearzero)
     flux_ea = F.relu(flux_ea)
 
-    # 2. Effective rainfall generation
-    flux_u = saturation_5(S1, d, p, P, nearzero=nearzero)
-    zeros = torch.zeros_like(flux_u)
-    flux_u = torch.clamp(flux_u, min=zeros, max=P)
+    # 2. 参数计算出的产流 (Effective Rainfall)
+    # 这是基于 d, p 参数估算的产流
+    flux_u_calc = saturation_5(S1, d, p, P, nearzero=nearzero)
+    flux_u_calc = torch.clamp(flux_u_calc, min=torch.zeros_like(P), max=P)
 
-    # 3. Split fast/slow (routing identity)
-    flux_uq = split_1(alpha, flux_u, nearzero=nearzero)
-    flux_us = split_1(1.0 - alpha, flux_u, nearzero=nearzero)
+    # 3. 核心修正：先算账，别急着 Clamp
+    # 理论上的新亏缺 = 旧亏缺 - 进水 + 出水
+    # S_temp = S1 - P + flux_ea + flux_u_calc
+    S1_temp = S1 - P + flux_ea + flux_u_calc
+    
+    # 4. 捕捉溢出 (Overflow / Saturation Excess)
+    # 如果 S1_temp < 0，说明水溢出来了。溢出量 = -S1_temp
+    flux_overflow = F.relu(-S1_temp)
+    
+    # 5. 将溢出转化为径流
+    # 总径流 = 参数算的径流 + 溢出的径流
+    flux_u_total = flux_u_calc + flux_overflow
+    
+    # 6. 更新状态
+    # 如果有溢出，S1_new 必然是 0（饱和）；如果没有，就是 S1_temp
+    S1_new = torch.clamp(S1_temp, min=nearzero)
 
-    # 4. State update (deficit store)
-    S1_new = torch.clamp(S1 - P + flux_ea + flux_u, min=nearzero)
+    # 7. 汇流分配 (Split)
+    flux_uq = split_1(alpha, flux_u_total, nearzero=nearzero)
+    flux_us = split_1(1.0 - alpha, flux_u_total, nearzero=nearzero)
 
-    # 5. Output aggregation (identity UH)
     Qsim = flux_uq + flux_us
     Ea = flux_ea
 

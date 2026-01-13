@@ -60,7 +60,7 @@ delta_model:
     - pet
     model:
     - UnifyV2
-    model_name: mopex2
+    model_name: tcm
     nearzero: 1e-6
     nmul: 16
     use_log_norm: []

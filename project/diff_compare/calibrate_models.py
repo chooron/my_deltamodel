@@ -140,7 +140,7 @@ if __name__=='__main__':
     print(f"{'='*20} Batch Calibration Start {'='*20}")
 
     # for nm in AVAILABLE_MODELs:
-    for nm in ['mopex1', 'mopex2', 'mopex3']:
+    for nm in ['tcm']:
         if nm not in SPECIAL_MODELS:
             print(f"\n[Processing] Calibrating {nm} model...")
             

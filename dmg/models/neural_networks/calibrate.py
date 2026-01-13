@@ -48,7 +48,7 @@ class Calibrate(torch.nn.Module):
             u = u.view(self.num_basins, self.num_start, self.ny).transpose(1, 2)
             
             # 4. 边界保护 (防止 Logit 溢出)
-            u = u * 0.998 + 0.001
+            u = u * 0.9 + 0.05
             
             # 5. Logit 变换 (Inverse Sigmoid)
             init_val = torch.log(u / (1 - u))
@@ -82,7 +82,7 @@ class Calibrate(torch.nn.Module):
         n_basins = config.get("num_basins", 559) 
         
         # 获取初始化策略，默认为 lhs_logit
-        init_strat = config.get("init_strategy", "lhs_logit")
+        init_strat = config.get("init_strategy", "normal")
 
         return cls(
             nx=config["nx2"],

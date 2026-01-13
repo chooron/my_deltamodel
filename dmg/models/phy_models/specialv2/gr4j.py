@@ -21,7 +21,7 @@ GR4J_PARAMS_BOUNDS = {
     "x1": [1.0, 2000.0],  # Max soil moisture storage [mm]
     "x2": [-20.0, 20.0],  # Water exchange coefficient [mm/d]
     "x3": [1.0, 300.0],   # Max routing store storage [mm]
-    "x4": [0.5, 5.0],    # Flow delay [d]
+    "x4": [0.5, 15.0],    # Flow delay [d] (align with core version)
 }
 
 def percolation_3(
@@ -102,8 +102,7 @@ def _gr4j_production_step_impl(
     flux_ps = torch.clamp(flux_ps, min=zeros, max=flux_pn)
 
     flux_es = evap_11(S1, x1, flux_en, nearzero=nearzero)
-    flux_es = torch.minimum(flux_es, S1 - nearzero)
-    flux_es = F.relu(flux_es)
+    flux_es = torch.minimum(flux_es, S1)
 
     # Update S1 for percolation
     S1_tmp = S1 + flux_ps - flux_es
@@ -112,8 +111,7 @@ def _gr4j_production_step_impl(
 
     # Percolation
     flux_perc = percolation_3(S1_tmp, x1, nearzero=nearzero)
-    flux_perc = torch.minimum(flux_perc, S1_tmp - nearzero)
-    flux_perc = F.relu(flux_perc)
+    flux_perc = torch.minimum(flux_perc, S1_tmp)
 
     # Final S1 update
     S1_new = torch.clamp(S1_tmp - flux_perc, min=nearzero_tensor, max=x1)
@@ -141,22 +139,24 @@ def _gr4j_routing_step_impl(
     # Constant for recharge (create inside or pass in, tensor scalar is cheap)
     p1_recharge = torch.tensor(3.5, device=S2.device, dtype=S2.dtype)
 
-    # 1. Groundwater exchange (F)
-    flux_fr = recharge_2(p1_recharge, S2, x3, x2, nearzero=nearzero)
+    # 1. Groundwater exchange (potential)
+    flux_fr_potential = recharge_2(p1_recharge, S2, x3, x2, nearzero=nearzero)
 
-    # 2. Routing store (S2) outflow (Qr)
+    # 2. Apply exchange with clamp to avoid over-draw
+    S2_before_exchange = S2
+    S2_temp = S2 + flux_fr_potential
+    S2_after_exchange = torch.clamp(S2_temp, min=nearzero)
+    flux_fr_actual = S2_after_exchange - S2_before_exchange
+    S2 = S2_after_exchange
+
+    # 3. Routing store outflow (Qr)
     flux_qr = baseflow_3(S2, x3, nearzero=nearzero)
+    flux_qr = torch.minimum(flux_qr, S2)
+    S2_new = torch.clamp(S2 - flux_qr, min=nearzero)
 
-    # Balance check: available water
-    available = S2 + flux_q9 + flux_fr
-    flux_qr = torch.minimum(flux_qr, available - nearzero)
-    flux_qr = F.relu(flux_qr)
-
-    # Update S2
-    S2_new = torch.clamp(available - flux_qr, min=nearzero)
-
-    # 3. Direct Branch (Qd)
-    flux_qd = F.relu(flux_q1 + flux_fr)
+    # 4. Direct branch uses potential exchange (consistent with GR4J spec)
+    flux_qd_potential = flux_q1 + flux_fr_potential
+    flux_qd = F.relu(flux_qd_potential)
 
     # Total Flow
     Q_total = flux_qr + flux_qd

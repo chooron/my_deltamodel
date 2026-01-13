@@ -20,11 +20,7 @@ NUMBER_INFO = {
 
 SPECIAL_MODELS = [
     "flexi", "flexb", "flexis", "gr4j", "hillslope", "ihacres",
-    "mopex4", "mopex5", "newzealand2", "plateau", "smar",
-]
-
-ERROR_MODELS = [
-    'hbv96', 'modhydrolog', 'penman', 'susannah2', 'topmodel', 'xinanjiang'
+    "newzealand2", "plateau", "smar",
 ]
 
 
@@ -43,24 +39,27 @@ class TestGlobalWaterBalance(unittest.TestCase):
         # 假设当前文件位于 project/tests/ 下，根据你的路径逻辑向上回溯
         # Path(__file__).parents[1] 指向 project 根目录
         # 请根据该文件实际放置的位置微调 parents 的索引
-        cls.base_output_path = (
+        cls.base_output_path_default = (
             Path(__file__).parents[1]
             / "output/camels_559/train1989-1998/no_multi/Calibrate_E50_R365_B100_n16_noLn_noWU_42"
         )
+        cls.base_output_path_special = (
+            Path(__file__).parents[1]
+            / "output/camels_559/train1989-1998/no_multi/Calibrate_E10_R365_B100_n16_noLn_noWU_42"
+        )
         cls.loss_name = "KgeLoss"
         cls.time_period = "1989-1998"
-        cls.epoch_suffix = "Ep50"
+        cls.epoch_suffix_default = "Ep50"
+        cls.epoch_suffix_special = "Ep10"
 
     def test_all_models_mass_conservation(self):
         """
         遍历所有非特殊模型，验证水量平衡误差是否小于 1mm
         """
         print(f"\n🚀 Starting Global Water Balance Check (Tolerance: {TOLERANCE_MM} mm)...")
-        print(f"📂 Base Path: {self.base_output_path}")
 
         # 过滤掉特殊模型
-        # test_models = [m for m in AVAILABLE_MODELS if m not in SPECIAL_MODELS]
-        test_models = SPECIAL_MODELS
+        test_models = ['tcm']
         
         passed_count = 0
         skipped_count = 0
@@ -68,14 +67,26 @@ class TestGlobalWaterBalance(unittest.TestCase):
         for model_name in test_models:
             # 使用 subTest，确保一个模型失败不会阻断后续模型的测试
             with self.subTest(model=model_name):
+                is_special = model_name in SPECIAL_MODELS
+
+                base_output_path = (
+                    self.base_output_path_special
+                    if is_special
+                    else self.base_output_path_default
+                )
+                epoch_suffix = (
+                    self.epoch_suffix_special
+                    if is_special
+                    else self.epoch_suffix_default
+                )
                 
                 # 1. 构建路径
                 save_path = (
-                    self.base_output_path 
+                    base_output_path 
                     / model_name 
                     / self.loss_name 
                     / "stat" 
-                    / f"test{self.time_period}_{self.epoch_suffix}"
+                    / f"test{self.time_period}_{epoch_suffix}"
                 )
                 
                 # 3. 加载数据

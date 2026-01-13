@@ -162,6 +162,14 @@ class UnifyV2(nn.Module):
                     s2 = curr_states[1]
                     s3 = curr_states[2]
                     St_sum_out[t] = s1 - s2 + s3
+                elif self.model_name == 'tcm':
+                    s1 = curr_states[0]
+                    s2 = curr_states[1]
+                    s3 = curr_states[2]
+                    s4 = curr_states[3]
+                    St_sum_out[t] = s1 - s2 + s3 + s4
+                elif self.model_name == 'ihacres':
+                    St_sum_out[t] = -curr_states[0]
                 elif self.model_name == 'topmodel':
                     St_sum_out[t] = curr_states[0] - curr_states[1]
                 else:

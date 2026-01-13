@@ -88,21 +88,29 @@ def _ihacres_production_step_impl(
     Phase 1: Production Step
     Calculates Moisture Deficit (S1) and Effective Rainfall splitting.
     """
-    # 1. Evapotranspiration
+    # 1. Evapotranspiration (increases deficit)
     flux_ea = evap_linear_deficit(S1, lp, PET, nearzero=nearzero)
     flux_ea = F.relu(flux_ea)
 
-    # 2. Flow generation (Effective Rainfall u)
-    flux_u = saturation_5(S1, d, p, P, nearzero=nearzero)
-    zeros = torch.zeros_like(flux_u)
-    flux_u = torch.clamp(flux_u, min=zeros, max=P)
+    # 2. Parameter-based effective rainfall (bounded by P)
+    flux_u_calc = saturation_5(S1, d, p, P, nearzero=nearzero)
+    flux_u_calc = torch.clamp(flux_u_calc, min=torch.zeros_like(P), max=P)
 
-    # 3. Flow splitting (Fast/Slow)
-    flux_uq = split_1(alpha, flux_u, nearzero=nearzero)
-    flux_us = split_1(1.0 - alpha, flux_u, nearzero=nearzero)
+    # 3. Compute provisional deficit update
+    S1_temp = S1 - P + flux_ea + flux_u_calc
 
-    # 4. State update (Deficit store S1)
-    S1_new = torch.clamp(S1 - P + flux_ea + flux_u, min=nearzero)
+    # 4. Capture overflow (saturation excess) when S1_temp < 0
+    flux_overflow = F.relu(-S1_temp)
+
+    # 5. Total effective rainfall includes overflow
+    flux_u_total = flux_u_calc + flux_overflow
+
+    # 6. Update state (cannot go below nearzero)
+    S1_new = torch.clamp(S1_temp, min=nearzero)
+
+    # 7. Split fast/slow branches using total effective rainfall
+    flux_uq = split_1(alpha, flux_u_total, nearzero=nearzero)
+    flux_us = split_1(1.0 - alpha, flux_u_total, nearzero=nearzero)
 
     return flux_uq, flux_us, flux_ea, S1_new
 

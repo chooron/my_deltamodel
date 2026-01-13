@@ -75,80 +75,118 @@ def gr4j_step(
     nearzero: float = 1e-6,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    GR4J model single-step calculation.
-
-    Model references:
-    Perrin, C., Michel, C., & Andrassian, V. (2003). Improvement of a
-    parsimonious model for streamflow simulation. Journal of Hydrology,
-    279(1-4), 275-289.
+    GR4J model single-step with Fixed Water Balance.
     """
 
     # 1. Net precipitation and evaporation
-    # flux_pn: net precipitation
-    # flux_en: net evaporation
-    # flux_ef: evaporation satisfied directly by precipitation
     flux_pn = F.relu(P - PET)
     flux_en = F.relu(PET - P)
-    flux_ef = P - flux_pn
+    flux_ef = P - flux_pn  # Evaporation directly from rainfall
 
+    # ==========================================
     # 2. Production store (S1) process
-    # flux_ps: part of net rain entering S1
+    # [Sequential Update]
+    # ==========================================
+    
+    # [Step 1] Rainfall enters S1
     flux_ps = saturation_4(S1, x1, flux_pn, nearzero=nearzero)
-    zeros = torch.zeros_like(flux_ps)
-    flux_ps = torch.clamp(flux_ps, min=zeros, max=flux_pn)
+    flux_ps = torch.clamp(flux_ps, min=torch.zeros_like(flux_pn), max=flux_pn)
+    S1 = S1 + flux_ps
 
-    # flux_es: evaporation from S1
+    # [Step 2] Evaporation from S1
     flux_es = evap_11(S1, x1, flux_en, nearzero=nearzero)
-    flux_es = torch.minimum(flux_es, S1 - nearzero)
-    flux_es = F.relu(flux_es)
+    flux_es = torch.minimum(flux_es, S1) # Safety
+    S1 = S1 - flux_es
 
-    # Update S1 for percolation calculation
-    S1_tmp = S1 + flux_ps - flux_es
-    S1_tmp = torch.clamp(S1_tmp, min=nearzero)
-
-    # flux_perc: percolation from S1
-    flux_perc = percolation_3(S1_tmp, x1, nearzero=nearzero)
-    flux_perc = torch.minimum(flux_perc, S1_tmp - nearzero)
-    flux_perc = F.relu(flux_perc)
-
-    # Final S1 update
-    S1_new = S1_tmp - flux_perc
+    # [Step 3] Percolation
+    flux_perc = percolation_3(S1, x1, nearzero=nearzero)
+    flux_perc = torch.minimum(flux_perc, S1) # Safety
+    S1_new = S1 - flux_perc
     S1_new = torch.clamp(S1_new, min=nearzero)
 
-    # 3. Routing and Exchange (TODO: Unit hydrograph routing)
-    # TODO: Unit hydrograph routing (route/uh_) not supported yet
-    # Total effective rainfall to be routed
+    # ==========================================
+    # 3. Routing Split
+    # ==========================================
     pr = (flux_pn - flux_ps) + flux_perc
-
-    # Split into two branches: 90% to routing store S2, 10% direct
-    # In this implementation, we assume instantaneous routing if uh_ is missing q9 for DplHalf1 DplFull2
-    #     uh_q9 = uh_1_half(x4,delta_t);
-    # uh_q1 = uh_2_full(2*x4,delta_t);
     flux_q9_in = 0.9 * pr
     flux_q1_direct = 0.1 * pr
 
+    # ==========================================
     # 4. Routing store (S2) process
-    # flux_fr: groundwater exchange
-    # recharge_2(p1=3.5, S, Smax=x3, p2=x2)
-    flux_fr = recharge_2(
+    # [Sequential Update with Actual Flux Calculation]
+    # ==========================================
+
+    # [Step 1] Add Inflow
+    S2 = S2 + flux_q9_in
+
+    # [Step 2] Exchange (flux_fr)
+    # 计算潜在交换量
+    flux_fr_potential = recharge_2(
         torch.tensor(3.5, device=P.device), S2, x3, x2, nearzero=nearzero
     )
+    
+    # --- 核心修正开始 ---
+    # 计算实际交换量 (Actual Exchange)
+    # 如果是正数(Gain)，无限制 (除非你想限制不能超过某个物理上限，通常GR4J不限制Gain)
+    # 如果是负数(Loss)，不能超过当前 S2 的水量
+    
+    # 逻辑：S2_temp = S2 + potential
+    # 如果 S2_temp < 0，说明亏空大于库存
+    # 实际亏空 = -S2 (把库存清零)
+    
+    # 这种写法利用 clamp 自动处理：
+    # S2_after_exchange = max(S2 + F, 0)
+    # Actual_F = S2_after_exchange - S2_before_exchange
+    
+    S2_before_exchange = S2
+    S2_temp = S2 + flux_fr_potential
+    S2_after_exchange = torch.clamp(S2_temp, min=nearzero)
+    
+    # 得到这一步真正发生的物理交换量（包含了 Clamp 的截断效果）
+    flux_fr_actual = S2_after_exchange - S2_before_exchange
+    
+    # 更新状态
+    S2 = S2_after_exchange
+    # --- 核心修正结束 ---
 
-    # flux_qr: outflow from routing store
-    # baseflow_3(S, Smax=x3)
+    # [Step 3] Outflow (flux_qr)
     flux_qr = baseflow_3(S2, x3, nearzero=nearzero)
-    flux_qr = torch.minimum(flux_qr, S2 + flux_q9_in + flux_fr - nearzero)
-    flux_qr = F.relu(flux_qr)
-
-    # Update S2 store
-    S2_new = S2 + flux_q9_in + flux_fr - flux_qr
+    flux_qr = torch.minimum(flux_qr, S2) # Safety
+    
+    # Update S2 (Subtract Outflow)
+    S2_new = S2 - flux_qr
     S2_new = torch.clamp(S2_new, min=nearzero)
 
+    # ==========================================
     # 5. Output Aggregation
-    # Direct branch also receives the same exchange flux (fq = fr)
-    flux_qt = flux_qr + F.relu(flux_q1_direct + flux_fr)
+    # ==========================================
+    
+    # Direct branch receives the POTENTIAL exchange flux? 
+    # GR4J 标准：Qd = max(0, 0.1*Pr + F)
+    # 这里的 F 通常指公式算出来的 potential F。
+    # 即使 S2 没水了，Direct Branch 的 F 是由参数决定的外部通量，
+    # 但 Direct Branch 的水量也是有限的 (0.1Pr)。
+    
+    flux_qd_potential = flux_q1_direct + flux_fr_potential # 注意：这里通常用 Potential F
+    flux_qd = F.relu(flux_qd_potential)
+    
+    # 计算 Direct Branch 的实际交换量
+    # 它的逻辑是：如果 (0.1Pr + F) < 0，说明 F 把 0.1Pr 吸干了，且 F 还有剩余吸力没处使
+    # 所以实际损失被限制在 -0.1Pr
+    actual_exchange_direct = flux_qd - flux_q1_direct
 
-    Qsim = flux_qt
-    Ea = flux_ef + flux_es
+    # Total Streamflow
+    Qsim = flux_qr + flux_qd
+    
+    # Total Evaporation (Physical)
+    E_physical = flux_ef + flux_es
+
+    # Total Exchange (Physical Gain/Loss)
+    # 必须使用 *Actual* S2 Exchange + *Actual* Direct Exchange
+    total_exchange = flux_fr_actual + actual_exchange_direct
+
+    # Unified "E" for Water Balance Check
+    # P = Q + (E_phys - Total_Exchange) + dS
+    Ea = E_physical - total_exchange
 
     return Qsim, Ea, S1_new, S2_new

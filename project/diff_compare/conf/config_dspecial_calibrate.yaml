@@ -59,7 +59,7 @@ delta_model:
     - tmean
     - pet
     model:
-    - Flexi
+    - Mopex5
     nearzero: 1e-6
     nmul: 16
     use_log_norm: []
