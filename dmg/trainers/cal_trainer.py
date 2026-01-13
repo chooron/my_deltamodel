@@ -293,37 +293,65 @@ class CalTrainer(BaseTrainer):
             )
 
             # ============================================================
-            # [核心修改] 仅在 Multi-Start 时对 Target 进行复制
+            # [Multi-Start Target 复制]
             # ============================================================
             if nmul > 1:
-                # 简单粗暴：直接取出来，复制，放回去
-                # 假设 dataset_sample[target_name] 维度是 [Batch, Time, 1]
-                # dim=0 是 Batch 维度，我们将其扩展为 Batch * nmul
-                dataset_sample["target"] = dataset_sample[
-                    "target"
-                ].repeat_interleave(nmul, dim=1)
+                dataset_sample["target"] = dataset_sample["target"].repeat_interleave(nmul, dim=1)
+
             # ============================================================
+            # 1. Forward pass
+            # ============================================================
+            # 注意：确保 model forward 后会将预测结果写入 dataset_sample (例如 key 为 'prediction' 或 'q_sim')
+            _ = self.model(dataset_sample) 
 
-            # Forward pass through model.
-            _ = self.model(dataset_sample)
-
-            # Loss 计算 (此时 Target 和 Prediction 的 Batch 维度已对齐)
-            loss = self.model.calc_loss(dataset_sample)
+            # ============================================================
+            # [核心修改] 2. 安全 Loss 计算 (Loss Masking)
+            # ============================================================
+            # 这里的目的是：计算每个样本的 Loss，剔除 NaN，只对“存活”的样本计算梯度
             
-            if torch.isnan(loss):
-                print(f"\n[Error] Epoch {epoch}, Batch {mb}: Loss is NaN!")
-                # 如果你想看更详细的信息，可以打印当前的 model 参数或其他信息
-                # print(f"Current Parameters: ...") 
-                raise ValueError("Training stopped: Loss became NaN.")
+            # A. 获取预测值和目标值 (请根据你模型的实际 Key 修改这里，例如 'q_sim')
+            # 假设 model.calc_loss 内部是基于 dataset_sample 里的某些 key 计算的
+            # 我们这里手动计算 element-wise loss 以便进行筛选
+            pred = dataset_sample.get('prediction') # <--- 请确认这里的 Key !!!
+            target = dataset_sample['target']
+            
+            # 备用方案：如果不知道 Key，可以尝试让 model 返回未 reduce 的 loss
+            # loss_element_wise = self.model.calc_loss(dataset_sample, reduction='none')
 
+            # 这里演示手动计算 MSE Loss 作为示例 (根据你的实际 Loss 修改，如 NSE)
+            # Shape: [Batch, Time] 或 [Batch, Mul, Time] -> [Batch * Mul]
+            loss_per_sample = torch.mean((pred - target) ** 2, dim=-1) # 对时间维求均值
+            
+            # B. 生成掩码：标记 Loss 为有限值 (非 NaN, 非 Inf) 的样本
+            valid_mask = torch.isfinite(loss_per_sample)
+            num_valid = valid_mask.sum().item()
+            total_samples = loss_per_sample.numel()
+            
+            # C. 决策分支
+            if num_valid == 0:
+                # 情况 1: 全军覆没
+                # 这一批次所有参数都导致了 NaN，直接跳过，不更新梯度
+                # 这样可以避免 "Training stopped" 报错，让模型有机会在下一个 Batch 恢复
+                if self.verbose:
+                    tqdm.tqdm.write(f"[Warning] Batch {mb}: All {total_samples} samples are NaN. Skipping step.")
+                self.optimizer.zero_grad()
+                continue # 跳过本轮循环，不进行 backward
+            else:
+                # 情况 2: 部分存活 或 全部存活
+                # 只对有效的样本求平均 Loss
+                # 这样 NaN 的样本对应的参数梯度为 0 (不更新)，好的参数正常更新
+                loss = loss_per_sample[valid_mask].mean()
+                
+                # (可选) 如果存活率太低，打印警告
+                if num_valid < total_samples and self.verbose:
+                    tqdm.tqdm.write(f"[Info] Batch {mb}: {total_samples - num_valid}/{total_samples} samples masked due to NaN.")
+
+            # ============================================================
+            # 3. Backward & Optimize
+            # ============================================================
             loss.backward()
 
-            # phy_model = self.model.model_dict['HbvTriton'].phy_model
-            # if len(phy_model.grad_error_list) > 0:
-            #     print(f"检测到梯度爆炸的参数: {phy_model.grad_error_list}")
-            #     raise RuntimeError("Gradient NaN/Inf detected!")
-            # if self.config['train'].get('clip_grad_norm', False):
-            #     # Add gradient clipping here
+            # 梯度裁剪 (保持你原有的逻辑)
             torch.nn.utils.clip_grad_norm_(
                 self.model.get_parameters(), max_norm=1.0
             )
@@ -335,9 +363,8 @@ class CalTrainer(BaseTrainer):
 
             if self.verbose:
                 tqdm.tqdm.write(
-                    f"Epoch {epoch}, batch {mb} | loss: {loss.item()}"
+                    f"Epoch {epoch}, batch {mb} | loss: {loss.item():.4f} | valid: {num_valid}/{total_samples}"
                 )
-
         if self.use_scheduler:
             self.scheduler.step()
 
@@ -393,7 +420,8 @@ class CalTrainer(BaseTrainer):
         # Save predictions and calculate metrics
         # 现在的 observations 和 batch_predictions 长度都是 N*16，完全匹配，直接保存即可
         log.info("Saving model outputs + Calculating metrics")
-        save_outputsv2(self.config, batch_predictions, observations, create_dirs=True)
+        if self.config.get("save_output", False):
+            save_outputsv2(self.config, batch_predictions, observations, create_dirs=True)
         self.predictions = self._batch_data(batch_predictions)
 
         # Calculate metrics

@@ -82,7 +82,7 @@ class Calibrate(torch.nn.Module):
         n_basins = config.get("num_basins", 559) 
         
         # 获取初始化策略，默认为 lhs_logit
-        init_strat = config.get("init_strategy", "normal")
+        init_strat = config.get("init_strategy", "lhs_logit")
 
         return cls(
             nx=config["nx2"],

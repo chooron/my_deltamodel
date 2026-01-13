@@ -141,7 +141,7 @@ if __name__=='__main__':
 
     # for nm in AVAILABLE_MODELs:
     # for nm in SPECIAL_MODELS:
-    for nm in ['ihacres']:
+    for nm in ['flexb']:
         if nm not in ['mopex4', 'mopex5']:
             print(f"\n[Processing] Calibrating {nm} model...")
             
