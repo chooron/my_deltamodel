@@ -92,6 +92,9 @@ def flexi_step(
     data to process understanding. Water Resources Research, 44(6).
     """
 
+    # UH parameters are unused (identity routing)
+    _ = (nlagf, nlags)
+
     # --- 1. Interception Process (S1) ---
     # flux_peff: Throughfall (Saturation excess from S1)
     flux_peff = interception_1(P, S1, imax, nearzero=nearzero)

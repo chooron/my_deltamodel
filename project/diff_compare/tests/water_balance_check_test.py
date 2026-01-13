@@ -60,8 +60,7 @@ class TestGlobalWaterBalance(unittest.TestCase):
 
         # 过滤掉特殊模型
         # test_models = [m for m in AVAILABLE_MODELS if m not in SPECIAL_MODELS]
-        test_models = ERROR_MODELS
-        test_models = ['mopex1','mopex2','mopex3','mopex4','mopex5',]
+        test_models = SPECIAL_MODELS
         
         passed_count = 0
         skipped_count = 0

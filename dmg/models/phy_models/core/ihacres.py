@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..flux.evap import evap_12
 from ..flux.saturation import saturation_5
 from ..flux.split import split_1
 
@@ -27,6 +26,17 @@ IHACRES_PARAMS_DESC = {
 }
 
 
+def evap_linear_deficit(
+    S: torch.Tensor,
+    lp: torch.Tensor,
+    Ep: torch.Tensor,
+    nearzero: float = 1e-6,
+) -> torch.Tensor:
+    """Linear evaporation decline based on moisture deficit (specialv2)."""
+    stress = torch.clamp(1.0 - S / (lp + nearzero), min=0.0, max=1.0)
+    return stress * Ep
+
+
 def create_initial_state(
     n_grid: int, nmul: int, device: torch.device, nearzero: float = 1e-6
 ) -> Tuple[torch.Tensor]:
@@ -49,6 +59,7 @@ def ihacres_step(
     alpha: torch.Tensor,
     tau_q: torch.Tensor,
     tau_s: torch.Tensor,
+    tau_d: torch.Tensor,
     # State variable (Deficit store)
     S1: torch.Tensor,
     nearzero: float = 1e-6,
@@ -62,39 +73,24 @@ def ihacres_step(
     Software, 19(1), 1-5.
     """
 
-    # 1. Evapotranspiration calculation (from deficit store)
-    # flux_ea = evap_12(S1, lp, PET)
-    flux_ea = evap_12(S1, lp, PET, nearzero=nearzero)
+    # 1. Evapotranspiration from deficit store (linear stress)
+    flux_ea = evap_linear_deficit(S1, lp, PET, nearzero=nearzero)
     flux_ea = F.relu(flux_ea)
 
-    # 2. Flow generation (effective rainfall)
-    # flux_u = saturation_5(S1, d, p, P)
+    # 2. Effective rainfall generation
     flux_u = saturation_5(S1, d, p, P, nearzero=nearzero)
     zeros = torch.zeros_like(flux_u)
     flux_u = torch.clamp(flux_u, min=zeros, max=P)
 
-    # 3. Flow splitting (Fast/Slow)
-    # uh_q = uh_5_half(tau_q,delta_t);
-    # uh_s = uh_5_half(tau_s,delta_t);
-    # uh_t = uh_8_delay(tau_d,delta_t);
-    # TODO: Unit hydrograph routing (route/uh_) not supported yet
-    # flux_uq = split_1(alpha, flux_u)
-    # flux_us = split_1(1-alpha, flux_u)
-    # The routed flows (xq, xs, xt) are not implemented.
-    # Qsim currently returns the total generated flow u.
+    # 3. Split fast/slow (routing identity)
     flux_uq = split_1(alpha, flux_u, nearzero=nearzero)
     flux_us = split_1(1.0 - alpha, flux_u, nearzero=nearzero)
 
-    # 4. State update (Deficit store S1)
-    # dS1 = -P + flux_ea + flux_u
-    S1_new = S1 - P + flux_ea + flux_u
+    # 4. State update (deficit store)
+    S1_new = torch.clamp(S1 - P + flux_ea + flux_u, min=nearzero)
 
-    # Normally deficit stores can be negative (representing surplus) or positive (deficit)
-    # but we usually keep a lower bound or handle physical limits based on model logic.
-    # In IHACRES, S1 is catchment moisture deficit.
-
-    # 5. Output aggregation
-    Qsim = flux_u  # Total moisture excess generated this step
+    # 5. Output aggregation (identity UH)
+    Qsim = flux_uq + flux_us
     Ea = flux_ea
 
     return Qsim, Ea, S1_new

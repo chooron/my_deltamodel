@@ -97,147 +97,103 @@ def smar_step(
     the Brosna catchment at Ferbane. Journal of Hydrology, 10.
     """
 
-    # --- 1. Effective Precipitation Calculation ---
+    # --- 1. Effective precipitation and baseline evap ---
     flux_pstar = effective_1(P, PET, nearzero=nearzero)
     flux_estar = effective_1(PET, P, nearzero=nearzero)
     flux_evap_base = torch.minimum(P, PET)
 
-    # --- 2. Surface and Infiltration Processes ---
-    # Total soil storage for saturation excess calculation
+    # --- 2. Runoff generation and infiltration ---
     S_tot = S1 + S2 + S3 + S4 + S5
-
-    # Direct runoff r1
-    # saturation_6(p1, S_tot, Smax, incoming)
     flux_r1 = saturation_6(h_runoff, S_tot, smax, flux_pstar, nearzero=nearzero)
     zeros = torch.zeros_like(flux_r1)
     flux_r1 = torch.clamp(flux_r1, min=zeros, max=flux_pstar)
 
-    # Remaining rainfall available for infiltration
-    P_rem = F.relu(flux_pstar - flux_r1)
+    inflow_after_r1 = F.relu(flux_pstar - flux_r1)
+    flux_i = infiltration_4(inflow_after_r1, y_inf, nearzero=nearzero)
+    flux_i = torch.clamp(flux_i, min=zeros, max=inflow_after_r1)
+    flux_r2 = F.relu(inflow_after_r1 - flux_i)
 
-    # Infiltration into top layer
-    # infiltration_4(incoming, infiltration_capacity)
-    flux_i = infiltration_4(P_rem, y_inf, nearzero=nearzero)
-    flux_i = torch.clamp(flux_i, min=zeros, max=P_rem)
-
-    # Second runoff (excess after infiltration)
-    flux_r2 = F.relu(P_rem - flux_i)
-
-    # --- 3. Sequential Updates for Multi-Layer Soil Stores (S1-S5) ---
-    # Capacity of each layer is smax/5
     layer_cap = smax / 5.0
 
-    # Layer 1 (S1)
-    S1_tmp = S1 + flux_i
-    S1_tmp = torch.clamp(S1_tmp, min=nearzero)
+    # --- 3. Soil layers evap + overflow chain ---
     flux_e1 = evap_13(
         c_evap,
         torch.tensor(0.0, device=P.device),
         flux_estar,
-        S1_tmp,
+        S1,
         nearzero=nearzero,
     )
-    flux_e1 = torch.minimum(flux_e1, S1_tmp - nearzero)
-    S1_tmp2 = S1_tmp - flux_e1
-    flux_q1 = saturation_1(
-        torch.zeros_like(P), S1_tmp2, layer_cap, nearzero=nearzero
-    )  # This follows logic: overflow from filling
-    # Re-calculating flux_q1 based on inflow:
+    flux_e1 = torch.minimum(flux_e1, S1 - nearzero)
     flux_q1 = saturation_1(flux_i, S1, layer_cap, nearzero=nearzero)
-    flux_q1 = torch.minimum(flux_q1, S1_tmp2 - nearzero)
-    S1_new = S1_tmp2 - flux_q1
+    flux_q1 = torch.clamp(flux_q1, min=zeros, max=flux_i)
+    S1_new = torch.clamp(S1 + flux_i - flux_e1 - flux_q1, min=nearzero)
 
-    # Layer 2 (S2)
-    S2_tmp = S2 + flux_q1
-    S2_tmp = torch.clamp(S2_tmp, min=nearzero)
     flux_e2 = evap_14(
         c_evap,
         torch.tensor(1.0, device=P.device),
         flux_estar,
-        S2_tmp,
-        S1_new,
+        S2,
+        S1,
         torch.tensor(0.1, device=P.device),
         nearzero=nearzero,
     )
-    flux_e2 = torch.minimum(flux_e2, S2_tmp - nearzero)
-    S2_tmp2 = S2_tmp - flux_e2
+    flux_e2 = torch.minimum(flux_e2, S2 - nearzero)
     flux_q2 = saturation_1(flux_q1, S2, layer_cap, nearzero=nearzero)
-    flux_q2 = torch.minimum(flux_q2, S2_tmp2 - nearzero)
-    S2_new = S2_tmp2 - flux_q2
+    flux_q2 = torch.clamp(flux_q2, min=zeros, max=flux_q1)
+    S2_new = torch.clamp(S2 + flux_q1 - flux_e2 - flux_q2, min=nearzero)
 
-    # Layer 3 (S3)
-    S3_tmp = S3 + flux_q2
-    S3_tmp = torch.clamp(S3_tmp, min=nearzero)
     flux_e3 = evap_14(
         c_evap,
         torch.tensor(2.0, device=P.device),
         flux_estar,
-        S3_tmp,
-        S2_new,
+        S3,
+        S2,
         torch.tensor(0.1, device=P.device),
         nearzero=nearzero,
     )
-    flux_e3 = torch.minimum(flux_e3, S3_tmp - nearzero)
-    S3_tmp2 = S3_tmp - flux_e3
+    flux_e3 = torch.minimum(flux_e3, S3 - nearzero)
     flux_q3 = saturation_1(flux_q2, S3, layer_cap, nearzero=nearzero)
-    flux_q3 = torch.minimum(flux_q3, S3_tmp2 - nearzero)
-    S3_new = S3_tmp2 - flux_q3
+    flux_q3 = torch.clamp(flux_q3, min=zeros, max=flux_q2)
+    S3_new = torch.clamp(S3 + flux_q2 - flux_e3 - flux_q3, min=nearzero)
 
-    # Layer 4 (S4)
-    S4_tmp = S4 + flux_q3
-    S4_tmp = torch.clamp(S4_tmp, min=nearzero)
     flux_e4 = evap_14(
         c_evap,
         torch.tensor(3.0, device=P.device),
         flux_estar,
-        S4_tmp,
-        S3_new,
+        S4,
+        S3,
         torch.tensor(0.1, device=P.device),
         nearzero=nearzero,
     )
-    flux_e4 = torch.minimum(flux_e4, S4_tmp - nearzero)
-    S4_tmp2 = S4_tmp - flux_e4
+    flux_e4 = torch.minimum(flux_e4, S4 - nearzero)
     flux_q4 = saturation_1(flux_q3, S4, layer_cap, nearzero=nearzero)
-    flux_q4 = torch.minimum(flux_q4, S4_tmp2 - nearzero)
-    S4_new = S4_tmp2 - flux_q4
+    flux_q4 = torch.clamp(flux_q4, min=zeros, max=flux_q3)
+    S4_new = torch.clamp(S4 + flux_q3 - flux_e4 - flux_q4, min=nearzero)
 
-    # Layer 5 (S5)
-    S5_tmp = S5 + flux_q4
-    S5_tmp = torch.clamp(S5_tmp, min=nearzero)
     flux_e5 = evap_14(
         c_evap,
         torch.tensor(4.0, device=P.device),
         flux_estar,
-        S5_tmp,
-        S4_new,
+        S5,
+        S4,
         torch.tensor(0.1, device=P.device),
         nearzero=nearzero,
     )
-    flux_e5 = torch.minimum(flux_e5, S5_tmp - nearzero)
-    S5_tmp2 = S5_tmp - flux_e5
+    flux_e5 = torch.minimum(flux_e5, S5 - nearzero)
     flux_r3 = saturation_1(flux_q4, S5, layer_cap, nearzero=nearzero)
-    flux_r3 = torch.minimum(flux_r3, S5_tmp2 - nearzero)
-    S5_new = S5_tmp2 - flux_r3
+    flux_r3 = torch.clamp(flux_r3, min=zeros, max=flux_q4)
+    S5_new = torch.clamp(S5 + flux_q4 - flux_e5 - flux_r3, min=nearzero)
 
-    # --- 4. Groundwater Process (S6) ---
-    # Excess from soil split into groundwater recharge and surface routing inflow
+    # --- 4. Groundwater store ---
     flux_rg = split_1(g_rech, flux_r3, nearzero=nearzero)
-    flux_r3star = F.relu(flux_r3 - flux_rg)
+    flux_r3star = split_1(1.0 - g_rech, flux_r3, nearzero=nearzero)
+    flux_qg = baseflow_1(kg, S6, nearzero=nearzero)
+    flux_qg = torch.minimum(flux_qg, S6 - nearzero)
+    flux_qg = F.relu(flux_qg)
+    S6_new = torch.clamp(S6 + flux_rg - flux_qg, min=nearzero)
 
-    S6_tmp = S6 + flux_rg
-    S6_tmp = torch.clamp(S6_tmp, min=nearzero)
-
-    flux_qg = baseflow_1(kg, S6_tmp, nearzero=nearzero)
-    flux_qg = torch.minimum(flux_qg, S6_tmp - nearzero)
-    S6_new = S6_tmp - flux_qg
-
-    # --- 5. Routing Aggregation ---
-    # TODO: Nash cascade routing (nk_delay, n_res) not supported yet.
-    # Instantaneous routing for combined runoff components:
+    # --- 5. Aggregation (identity UH) ---
     flux_qr = flux_r1 + flux_r2 + flux_r3star
-
-    # Qsim = Routed runoff + Groundwater discharge
-    # Ea = Initial overlap evap + All layer ETs
     Qsim = flux_qr + flux_qg
     Ea = flux_evap_base + flux_e1 + flux_e2 + flux_e3 + flux_e4 + flux_e5
 

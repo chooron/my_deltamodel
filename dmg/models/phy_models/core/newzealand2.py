@@ -74,6 +74,9 @@ def newzealand2_step(
     Resources, 26(3), 219-235.
     """
 
+    # Routing delay d_delay is unused (identity routing)
+    _ = d_delay
+
     # --- 1. Interception process (S1) ---
     # flux_qtf: Throughfall (Fast process for S1)
     flux_qtf = interception_1(P, S1, s1max, nearzero=nearzero)

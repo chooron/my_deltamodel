@@ -107,6 +107,9 @@ def flexis_step(
     understanding. Water Resources Research, 44(6).
     """
 
+    # UH parameters are unused (identity routing)
+    _ = (nlagf, nlags)
+
     # --- 1. Snow Process (S1) ---
     # flux_ps: snowfall
     flux_ps = snowfall_1(P, T, tt, nearzero=nearzero)

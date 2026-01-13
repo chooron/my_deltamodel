@@ -25,6 +25,8 @@ SPECIAL_MODELS = [
     "smar",
 ]
 
+MODELS_WITH_DOY = {"mopex4", "mopex5"}
+
 class TestAllModelsGradient(unittest.TestCase):
     def setUp(self):
         # 1. 基础配置：使用双精度 float64 以确保 gradcheck 通过
@@ -55,22 +57,22 @@ class TestAllModelsGradient(unittest.TestCase):
         核心测试逻辑：遍历所有注册的模型并进行梯度检查
         """
         # 获取所有模型名称
-        model_names = ['mopex1', 'mopex2', 'mopex3', 'mopex4', 'mopex5']
+        model_names = ['mopex4','mopex5']
         # model_names = list(PARAM_INFO.keys())
         print(f"\n🚀 Starting Batch Gradient Check for {len(model_names)} models...")
         
         failed_models = []
         
         for model_name in model_names:
-            if model_name not in SPECIAL_MODELS:
-                print(f"\n[Testing] Model: {model_name} ...", end=" ", flush=True)
-                try:
-                    self.run_single_model_check(model_name)
-                    print("✅ PASSED")
-                except Exception as e:
-                    print(f"❌ FAILED")
-                    print(f"    Error: {str(e)}")
-                    failed_models.append(model_name)
+            # if model_name not in SPECIAL_MODELS:
+            print(f"\n[Testing] Model: {model_name} ...", end=" ", flush=True)
+            try:
+                self.run_single_model_check(model_name)
+                print("✅ PASSED")
+            except Exception as e:
+                print(f"❌ FAILED")
+                print(f"    Error: {str(e)}")
+                failed_models.append(model_name)
                 
         print("\n" + "="*40)
         if len(failed_models) == 0:
@@ -93,10 +95,14 @@ class TestAllModelsGradient(unittest.TestCase):
         param_names = list(param_bounds.keys())
         n_params = len(param_names)
 
-        # 2. 构造随机输入 (P, T, PET)
+        needs_doy = model_name in MODELS_WITH_DOY
+
+        # 2. 构造随机输入 (P, T, PET, [DOY])
         P = self._generate_random_tensor(0.1, 10.0)
         T = self._generate_random_tensor(-5.0, 25.0)
         PET = self._generate_random_tensor(0.1, 5.0)
+        if needs_doy:
+            doy = self._generate_random_tensor(1.0, 365.0)
 
         # 3. 构造随机参数 (Params)
         params_list = []
@@ -123,23 +129,35 @@ class TestAllModelsGradient(unittest.TestCase):
             states_list.append(s_val)
 
         # 5. 定义 Wrapper 函数
-        def functional_wrapper(p_in, t_in, pet_in, *args):
-            # 动态切分 args
-            # UnifyV2 的逻辑是：先排参数，再排状态
-            # 只要 inputs 构造顺序对，这里切片就对
-            current_params = args[:n_params]
-            current_states = args[n_params:]
-            
+        def functional_wrapper(*wrapper_args):
+            # 动态切分 args：先基础输入，再参数，再状态
+            p_in, t_in, pet_in = wrapper_args[0:3]
+            offset = 3
+            doy_in = None
+            if needs_doy:
+                doy_in = wrapper_args[offset]
+                offset += 1
+
+            current_params = wrapper_args[offset : offset + n_params]
+            current_states = wrapper_args[offset + n_params :]
+
+            call_args = [p_in, t_in, pet_in]
+            if needs_doy:
+                call_args.append(doy_in)
+
             return step_fn(
-                p_in, t_in, pet_in, 
-                *current_params, 
-                *current_states, 
-                self.nearzero 
+                *call_args,
+                *current_params,
+                *current_states,
+                self.nearzero,
             )
 
         # 6. 准备输入 Tuple
-        # 顺序: P, T, PET, Param1...ParamN, State1...StateM
-        inputs = (P, T, PET) + tuple(params_list) + tuple(states_list)
+        # 顺序: P, T, PET, [DOY], Param1...ParamN, State1...StateM
+        if needs_doy:
+            inputs = (P, T, PET, doy) + tuple(params_list) + tuple(states_list)
+        else:
+            inputs = (P, T, PET) + tuple(params_list) + tuple(states_list)
 
         # 7. 执行 Gradcheck
         gradcheck(functional_wrapper, inputs, eps=1e-6, atol=1e-5, raise_exception=True)

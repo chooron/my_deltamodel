@@ -3,9 +3,7 @@ import torch.nn.functional as F
 from typing import Tuple
 from ..flux.evap import evap_11
 from ..flux.saturation import saturation_4
-from ..flux.percolation import percolation_3
 from ..flux.recharge import recharge_2
-from ..flux.baseflow import baseflow_3
 
 # Parameter range dictionary (based on MARRMoT m_07_gr4j_4p_2s)
 GR4J_PARAMS_BOUNDS = {
@@ -22,6 +20,31 @@ GR4J_PARAMS_DESC = {
     "x3": "Maximum routing store storage [mm]",
     "x4": "Flow delay [d]",
 }
+
+
+def percolation_3(
+    S: torch.Tensor,
+    Smax: torch.Tensor,
+    nearzero: float = 1e-6,
+) -> torch.Tensor:
+    """Safe nonlinear percolation consistent with specialv2."""
+    denom = Smax + nearzero
+    ratio = S / denom
+    ratio_safe = torch.clamp(ratio, max=1.5)
+    const_term = (4.0 / 9.0) ** 4.0 / 4.0
+    return const_term * S * ratio_safe.pow(4.0)
+
+
+def baseflow_3(
+    S: torch.Tensor,
+    Smax: torch.Tensor,
+    nearzero: float = 1e-6,
+) -> torch.Tensor:
+    """Safe nonlinear baseflow consistent with specialv2."""
+    denom = Smax + nearzero
+    ratio = S / denom
+    ratio_safe = torch.clamp(ratio, max=1.5)
+    return 0.25 * S * ratio_safe.pow(4.0)
 
 
 def create_initial_state(

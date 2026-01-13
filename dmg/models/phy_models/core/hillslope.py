@@ -69,6 +69,9 @@ def hillslope_step(
     (FLEX-Topo). Hydrology and Earth System Sciences, 14(12), 2681-2692.
     """
 
+    # Routing parameter th is unused (identity routing)
+    _ = th
+
     # 1. Inflow + Interception
     # flux_pe: interception excess
     # flux_ei: intercepted rainfall (tracks tracks 'intercepted' rainfall for Ea)

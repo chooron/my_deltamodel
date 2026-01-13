@@ -80,6 +80,9 @@ def flexb_step(
     data to process understanding. Water Resources Research, 44(6).
     """
 
+    # UH parameters are unused (identity routing)
+    _ = (nlagf, nlags)
+
     # --- 1. Unsaturated Zone Processes (S1) ---
 
     # flux_ru: Infiltration into S1
