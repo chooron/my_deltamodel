@@ -24,8 +24,9 @@ from dmg.models.phy_models.core import PARAM_INFO, NUMBER_INFO # noqa
 # ==========================================
 plt.rcParams.update(
     {
-        "font.family": "sans-serif",
-        "font.sans-serif": ["Arial", "DejaVu Sans"],
+        'font.family': 'serif',             # 声明使用衬线字体
+        'font.serif': ['STIXGeneral'],  # 指定具体的衬线字体为 Times New Roman
+        'mathtext.fontset': 'stix',       
         "font.size": 10,
         "axes.labelsize": 11,
         "xtick.labelsize": 9,  # X轴标签多，字体稍小
@@ -47,31 +48,6 @@ MARRMOT_TEST_FILE = CSV_DIR / "marrmot_test_kge.csv"
 # Use invKGE (1/Q) instead of train-set KGE
 DIF_INV_FILE = CSV_DIR / "dif_test_invkge.csv"
 MARRMOT_INV_FILE = CSV_DIR / "marrmot_test_invkge.csv"
-
-SPECIAL_MODELS = {
-    "flexi",
-    "flexb",
-    "flexis",
-    "gr4j",
-    "hillslope",
-    "ihacres",
-    "newzealand2",
-    "plateau",
-    "smar",
-}
-
-HAS_SNOW_MODELS = {
-    "alpine1",
-    "alpine2",
-    "mopex2",
-    "mopex3",
-    "mopex4",
-    "flexis",
-    "mopex5",
-    "hbv96",
-    "smar",
-}
-
 
 def _read_metric_csv(path: Path) -> pd.DataFrame:
     if not path.exists():
@@ -190,14 +166,14 @@ def plot_structural_analysis(data, model_order, model_labels, param_list):
         {
             "col": "delta_test",
             "ylim": None,
-            "ylabel": r"Test Diff (dif - marrmot)",
+                "ylabel": r"Test Diff (dMoT - MARRMoT)",
             "title": "(a) Test performance gain",
             "ref_line": 0,
         },
         {
             "col": "delta_train",
             "ylim": ylim_delta_train,
-            "ylabel": r"KGE(1/Q) Diff (dif - marrmot)",
+                "ylabel": r"KGE(1/Q) Diff (dMoT - MARRMoT)",
             "title": "(b) Low-flow gain (KGE 1/Q)",
             "ref_line": 0,
             "yscale": {"type": "symlog", "linthresh": 0.1, "linscale": 1.0},
@@ -345,7 +321,7 @@ def plot_structural_analysis(data, model_order, model_labels, param_list):
             ax.text(
                 0.02,
                 0.9,
-                "dif better $\u2191$",
+                "dMoT better \u2191",
                 transform=ax.transAxes,
                 fontsize=9,
                 fontweight="bold",

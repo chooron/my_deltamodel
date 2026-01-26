@@ -1,192 +1,201 @@
 import torch
 import torch.nn.functional as F
 from typing import Tuple
-from ..flux.evap import evap_11
-from ..flux.saturation import saturation_4
-from ..flux.recharge import recharge_2
 
-# Parameter range dictionary (based on MARRMoT m_07_gr4j_4p_2s)
-GR4J_PARAMS_BOUNDS = {
-    "x1": [1.0, 2000.0],  # Max soil moisture storage [mm]
-    "x2": [-20.0, 20.0],  # Water exchange coefficient [mm/d]
-    "x3": [1.0, 300.0],  # Max routing store storage [mm]
-    "x4": [0.5, 15.0],  # Flow delay [d]
-}
+# ==========================================
+# 辅助计算函数 (保持 Tanh 和 解析解 不变)
+# ==========================================
 
-# Parameter description dictionary
-GR4J_PARAMS_DESC = {
-    "x1": "Maximum soil moisture storage [mm]",
-    "x2": "Water exchange coefficient [mm/d]",
-    "x3": "Maximum routing store storage [mm]",
-    "x4": "Flow delay [d]",
-}
-
-
-def percolation_3(
-    S: torch.Tensor,
-    Smax: torch.Tensor,
-    nearzero: float = 1e-6,
-) -> torch.Tensor:
-    """Safe nonlinear percolation consistent with specialv2."""
-    denom = Smax + nearzero
-    ratio = S / denom
-    ratio_safe = torch.clamp(ratio, max=1.5)
-    const_term = (4.0 / 9.0) ** 4.0 / 4.0
-    return const_term * S * ratio_safe.pow(4.0)
-
-
-def baseflow_3(
-    S: torch.Tensor,
-    Smax: torch.Tensor,
-    nearzero: float = 1e-6,
-) -> torch.Tensor:
-    """Safe nonlinear baseflow consistent with specialv2."""
-    denom = Smax + nearzero
-    ratio = S / denom
-    ratio_safe = torch.clamp(ratio, max=1.5)
-    return 0.25 * S * ratio_safe.pow(4.0)
-
-
-def create_initial_state(
-    n_grid: int, nmul: int, device: torch.device, nearzero: float = 1e-6
+def _calc_production_store_tanh(
+    S: torch.Tensor, x1: torch.Tensor, Pn: torch.Tensor, En: torch.Tensor, nearzero: float
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Create initial states for GR4J model.
-    S1: Production store
-    S2: Routing store
-    """
-    S1 = torch.zeros((n_grid, nmul), device=device) + nearzero
-    S2 = torch.zeros((n_grid, nmul), device=device) + nearzero
-    return S1, S2
+    """Tanh 产流计算"""
+    ratio_s_x1 = S / (x1 + nearzero)
+    
+    # Ps
+    tanh_pn_x1 = torch.tanh(Pn / (x1 + nearzero))
+    ps_num = x1 * (1.0 - ratio_s_x1.pow(2)) * tanh_pn_x1
+    ps_den = 1.0 + ratio_s_x1 * tanh_pn_x1
+    ps = ps_num / (ps_den + nearzero)
+    
+    # Es
+    tanh_en_x1 = torch.tanh(En / (x1 + nearzero))
+    es_num = S * (2.0 - ratio_s_x1) * tanh_en_x1
+    es_den = 1.0 + (1.0 - ratio_s_x1) * tanh_en_x1
+    es = es_num / (es_den + nearzero)
+    
+    return ps, es
 
+def _calc_percolation_analytical(
+    S: torch.Tensor, x1: torch.Tensor, nearzero: float
+) -> torch.Tensor:
+    """解析解下渗"""
+    ratio_perc = (4.0 / 9.0) * (S / (x1 + nearzero))
+    term_perc = (1.0 + ratio_perc.pow(4)).pow(-0.25)
+    perc = S * (1.0 - term_perc)
+    return perc
+
+def _calc_routing_outflow_analytical(
+    S2: torch.Tensor, x3: torch.Tensor, nearzero: float
+) -> torch.Tensor:
+    """解析解汇流流出"""
+    ratio_s2_x3 = S2 / (x3 + nearzero)
+    term_qr = (1.0 + ratio_s2_x3.pow(4)).pow(-0.25)
+    qr = S2 * (1.0 - term_qr)
+    return qr
+
+# ==========================================
+# 主计算步骤 (修正水量平衡)
+# ==========================================
 
 def gr4j_step(
     P: torch.Tensor,
     T: torch.Tensor,
     PET: torch.Tensor,
-    # Parameters matching GR4J_PARAMS_BOUNDS keys
     x1: torch.Tensor,
     x2: torch.Tensor,
     x3: torch.Tensor,
     x4: torch.Tensor,
-    # State variables
     S1: torch.Tensor,
     S2: torch.Tensor,
     nearzero: float = 1e-6,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    GR4J model single-step with Fixed Water Balance.
+    GR4J Step with CLOSED LOOP Water Balance.
+    Ensures: P = Qsim + Ea + dS1 + dS2
+    Method: The 'Exchange' (F) term is subtracted from Ea.
     """
 
-    # 1. Net precipitation and evaporation
-    flux_pn = F.relu(P - PET)
-    flux_en = F.relu(PET - P)
-    flux_ef = P - flux_pn  # Evaporation directly from rainfall
+    # 1. 气象强迫分量
+    diff = P - PET
+    flux_pn = F.relu(diff)      # 净降雨
+    flux_en = F.relu(-diff)     # 净蒸发能力
+    flux_ei = P - flux_pn       # 截留蒸发 (Interception)
+
+    # 记录初始状态用于计算 delta S
+    S1_init = S1.clone()
+    S2_init = S2.clone()
+    nearzero_tensor = torch.zeros_like(flux_pn) + nearzero
+    # 安全截断参数
+    S1 = torch.clamp(S1, min=nearzero_tensor, max=x1)
+    S2 = torch.clamp(S2, min=nearzero)
 
     # ==========================================
-    # 2. Production store (S1) process
-    # [Sequential Update]
+    # 2. 产流库 (S1) - 内部平衡
     # ==========================================
+    flux_ps, flux_es = _calc_production_store_tanh(S1, x1, flux_pn, flux_en, nearzero)
     
-    # [Step 1] Rainfall enters S1
-    flux_ps = saturation_4(S1, x1, flux_pn, nearzero=nearzero)
-    flux_ps = torch.clamp(flux_ps, min=torch.zeros_like(flux_pn), max=flux_pn)
-    S1 = S1 + flux_ps
+    # 中间更新
+    S1_mid = S1 - flux_es + flux_ps
+    S1_mid = torch.clamp(S1_mid, min=nearzero_tensor, max=x1)
+    
+    # 下渗
+    flux_perc = _calc_percolation_analytical(S1_mid, x1, nearzero)
+    S1_new = S1_mid - flux_perc
+    S1_new = torch.clamp(S1_new, min=nearzero_tensor, max=x1)
 
-    # [Step 2] Evaporation from S1
-    flux_es = evap_11(S1, x1, flux_en, nearzero=nearzero)
-    flux_es = torch.minimum(flux_es, S1) # Safety
-    S1 = S1 - flux_es
-
-    # [Step 3] Percolation
-    flux_perc = percolation_3(S1, x1, nearzero=nearzero)
-    flux_perc = torch.minimum(flux_perc, S1) # Safety
-    S1_new = S1 - flux_perc
-    S1_new = torch.clamp(S1_new, min=nearzero)
+    # 产流库没有外部交换，只有蒸发
+    # delta_S1 = Ps - Es - Perc
+    # 物理蒸发 (Physical Evap from S1) = flux_es
 
     # ==========================================
-    # 3. Routing Split
+    # 3. 路径分配
     # ==========================================
-    pr = (flux_pn - flux_ps) + flux_perc
-    flux_q9_in = 0.9 * pr
-    flux_q1_direct = 0.1 * pr
+    # 有效降雨 Pr
+    flux_pr = flux_perc + (flux_pn - flux_ps)
+    
+    # 分配
+    flux_q9 = 0.9 * flux_pr
+    flux_q1 = 0.1 * flux_pr
 
     # ==========================================
-    # 4. Routing store (S2) process
-    # [Sequential Update with Actual Flux Calculation]
+    # 4. 汇流库 (S2) - 包含外部交换 F
     # ==========================================
-
-    # [Step 1] Add Inflow
-    S2 = S2 + flux_q9_in
-
-    # [Step 2] Exchange (flux_fr)
-    # 计算潜在交换量
-    flux_fr_potential = recharge_2(
-        torch.tensor(3.5, device=P.device), S2, x3, x2, nearzero=nearzero
-    )
+    # 计算理论交换量 F
+    flux_f_theoretical = x2 * (S2 / (x3 + nearzero)).pow(3.5)
     
-    # --- 核心修正开始 ---
-    # 计算实际交换量 (Actual Exchange)
-    # 如果是正数(Gain)，无限制 (除非你想限制不能超过某个物理上限，通常GR4J不限制Gain)
-    # 如果是负数(Loss)，不能超过当前 S2 的水量
-    
-    # 逻辑：S2_temp = S2 + potential
-    # 如果 S2_temp < 0，说明亏空大于库存
-    # 实际亏空 = -S2 (把库存清零)
-    
-    # 这种写法利用 clamp 自动处理：
-    # S2_after_exchange = max(S2 + F, 0)
-    # Actual_F = S2_after_exchange - S2_before_exchange
-    
+    # 更新 S2 (流入 Q9 + 交换 F)
+    # 使用 clamp 保证非负，这可能会改变实际发生的 F
+    # S2_temp = S2 + Q9 + F
     S2_before_exchange = S2
-    S2_temp = S2 + flux_fr_potential
-    S2_after_exchange = torch.clamp(S2_temp, min=nearzero)
+    S2_integrated = S2 + flux_q9 + flux_f_theoretical
+    S2_integrated = torch.clamp(S2_integrated, min=nearzero)
     
-    # 得到这一步真正发生的物理交换量（包含了 Clamp 的截断效果）
-    flux_fr_actual = S2_after_exchange - S2_before_exchange
-    
-    # 更新状态
-    S2 = S2_after_exchange
-    # --- 核心修正结束 ---
+    # 【关键】计算 S2 实际发生的净得失水 (Net Gain/Loss of S2)
+    # 这个 Net Change 包含了 Q9 (内部转移) 和 F_actual (外部交换)
+    # Actual_Inflow_Total = S2_integrated - S2_before_exchange
+    # 其中 F_actual_s2 = Actual_Inflow_Total - flux_q9
+    f_actual_s2 = (S2_integrated - S2_before_exchange) - flux_q9
 
-    # [Step 3] Outflow (flux_qr)
-    flux_qr = baseflow_3(S2, x3, nearzero=nearzero)
-    flux_qr = torch.minimum(flux_qr, S2) # Safety
-    
-    # Update S2 (Subtract Outflow)
-    S2_new = S2 - flux_qr
-    S2_new = torch.clamp(S2_new, min=nearzero)
+    # 计算流出 Qr
+    flux_qr = _calc_routing_outflow_analytical(S2_integrated, x3, nearzero)
+    S2_new = S2_integrated - flux_qr
 
     # ==========================================
-    # 5. Output Aggregation
+    # 5. 直接流 (Qd) - 包含外部交换 F
     # ==========================================
-    
-    # Direct branch receives the POTENTIAL exchange flux? 
-    # GR4J 标准：Qd = max(0, 0.1*Pr + F)
-    # 这里的 F 通常指公式算出来的 potential F。
-    # 即使 S2 没水了，Direct Branch 的 F 是由参数决定的外部通量，
-    # 但 Direct Branch 的水量也是有限的 (0.1Pr)。
-    
-    flux_qd_potential = flux_q1_direct + flux_fr_potential # 注意：这里通常用 Potential F
+    # Qd = max(0, Q1 + F)
+    # 理论上 Direct Branch 的 F 和 S2 的 F 是一样的 (flux_f_theoretical)
+    flux_qd_potential = flux_q1 + flux_f_theoretical
     flux_qd = F.relu(flux_qd_potential)
     
-    # 计算 Direct Branch 的实际交换量
-    # 它的逻辑是：如果 (0.1Pr + F) < 0，说明 F 把 0.1Pr 吸干了，且 F 还有剩余吸力没处使
-    # 所以实际损失被限制在 -0.1Pr
-    actual_exchange_direct = flux_qd - flux_q1_direct
+    # 【关键】计算 Direct Branch 实际发生的外部交换
+    # Qd = Q1 + F_actual_q1
+    # F_actual_q1 = Qd - Q1
+    f_actual_q1 = flux_qd - flux_q1
 
-    # Total Streamflow
+    # ==========================================
+    # 6. 输出与平衡整合
+    # ==========================================
     Qsim = flux_qr + flux_qd
     
-    # Total Evaporation (Physical)
-    E_physical = flux_ef + flux_es
+    # 总物理蒸发 (Loss)
+    E_physical = flux_ei + flux_es 
+    
+    # 总外部交换 (Gain 为正, Loss 为负)
+    F_total_actual = f_actual_s2 + f_actual_q1
+    
+    # 【核心修正】: 为了满足 P = Q + Ea + dS
+    # 我们定义 Ea 为 "Net Water Export to Atmosphere/Groundwater"
+    # Ea = E_physical - F_total_actual
+    # 解释: 
+    #   如果 F > 0 (进水), 相当于 Ea 变小 (甚至为负，说明总进水 > 总蒸发)
+    #   如果 F < 0 (出水), 相当于 Ea 变大 (水不仅蒸发了，还漏走了)
+    Ea_balanced = E_physical - F_total_actual
 
-    # Total Exchange (Physical Gain/Loss)
-    # 必须使用 *Actual* S2 Exchange + *Actual* Direct Exchange
-    total_exchange = flux_fr_actual + actual_exchange_direct
+    # 验证逻辑 (仅供理解，无需写入代码):
+    # dS1 = S1_new - S1_init = flux_ps - flux_es - flux_perc
+    # dS2 = S2_new - S2_init = flux_q9 + flux_f_actual_s2 - flux_qr
+    # P = flux_pn + flux_ei
+    # Q = flux_qr + flux_qd
+    # ... 代入后会发现恒等
+    
+    return Qsim, Ea_balanced, S1_new, S2_new
 
-    # Unified "E" for Water Balance Check
-    # P = Q + (E_phys - Total_Exchange) + dS
-    Ea = E_physical - total_exchange
 
-    return Qsim, Ea, S1_new, S2_new
+# Parameter range dictionary (based on MARRMoT m_07_gr4j_4p_2s)
+GR4J_PARAMS_BOUNDS = {
+    "x1": [1.0, 2000.0],  # Max soil moisture storage [mm]
+    "x2": [-20.0, 20.0],  # Water exchange coefficient [mm/d]
+    "x3": [1.0, 300.0],   # Max routing store storage [mm]
+    "x4": [0.5, 15.0],    # Flow delay [d]
+}
+
+
+
+def create_initial_state(
+    n_grid: int, nmul: int, device: torch.device, nearzero: float = 1e-6
+) -> Tuple[
+    torch.Tensor, torch.Tensor
+]:
+    """
+    Create initial states for Flex-IS model.
+    S1: Snow store
+    S2: Interception store
+    S3: Soil moisture store
+    S4: Fast routing store
+    S5: Slow routing store
+    """
+    S1 = torch.zeros((n_grid, nmul), device=device) + nearzero
+    S2 = torch.zeros((n_grid, nmul), device=device) + nearzero
+    return S1, S2

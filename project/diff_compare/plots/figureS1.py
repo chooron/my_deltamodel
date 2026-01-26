@@ -24,12 +24,12 @@ from dmg.models.phy_models.core import PARAM_INFO, NUMBER_INFO  # noqa
 # 1. 统一风格与配色配置 (HESS Style)
 # ==========================================
 plt.rcParams.update({
-    'font.family': 'serif',             # 声明使用衬线字体
-    'font.serif': ['STIXGeneral'],  # 指定具体的衬线字体为 Times New Roman
-    'mathtext.fontset': 'stix',      
+    'font.family': 'serif',
+    'font.serif': ['STIXGeneral'],
+    'mathtext.fontset': 'stix',   
     'font.size': 12,
     'axes.labelsize': 13,
-    'axes.titlesize': 13,
+    'axes.titlesize': 14,
     'xtick.labelsize': 12,
     'ytick.labelsize': 12,
     'lines.linewidth': 1.5,
@@ -51,10 +51,10 @@ MARKER_OURS = 'o'
 # 2. 数据读取 (与 figure2 一致)
 # ==========================================
 CSV_DIR = Path(__file__).resolve().parent / "csv"
-DIF_TEST_FILE = CSV_DIR / "dif_test_kge.csv"
-DIF_TRAIN_FILE = CSV_DIR / "dif_train_kge.csv"
-MARRMOT_TEST_FILE = CSV_DIR / "marrmot_test_kge.csv"
-MARRMOT_TRAIN_FILE = CSV_DIR / "marrmot_train_kge.csv"
+DIF_TEST_FILE = CSV_DIR / "dif_test_invkge.csv"
+DIF_TRAIN_FILE = CSV_DIR / "dif_train_invkge.csv"
+MARRMOT_TEST_FILE = CSV_DIR / "marrmot_test_invkge.csv"
+MARRMOT_TRAIN_FILE = CSV_DIR / "marrmot_train_invkge.csv"
 
 
 def _read_metric_csv(path: Path) -> pd.DataFrame:
@@ -154,9 +154,9 @@ def plot_enhanced_generalization(df_stats):
     if finite_vals.size == 0:
         raise ValueError("No finite values to plot.")
     # 统一下界到 0.3，防止极端值拉低视野；低于下界的点将贴边显示
-    limit_min = 0.3
-    limit_max = min(0.95, finite_vals.max() + 0.05)
-    if limit_max - limit_min < 0.15:
+    limit_min = 0.0
+    limit_max = min(1.0, finite_vals.max() + 0.05)
+    if limit_max - limit_min < 0.2:
         limit_max = min(1.0, limit_min + 0.3)
 
     clip_floor = limit_min + 0.002
@@ -219,7 +219,7 @@ def plot_enhanced_generalization(df_stats):
             train_mar_plot.iloc[ci] + 0.006,
             test_mar_plot.iloc[ci] + 0.006,
             f"{_fmt_model('collie1')}\ntrain={train_mar.iloc[ci]:.2f}\ntest={test_mar.iloc[ci]:.2f}",
-            fontsize=9.5,
+            fontsize=8.5,
             fontweight='bold',
             color='#b02a37',
             bbox=dict(facecolor='white', alpha=0.75, edgecolor='none', pad=1.5),
@@ -232,29 +232,34 @@ def plot_enhanced_generalization(df_stats):
     df_stats['improve_test'] = improve_test
     gen_pool = df_stats[df_stats['train_dif_med'] > 0.6]
     best_gen = gen_pool.nsmallest(2, 'gap_dif') if not gen_pool.empty else df_stats.nsmallest(2, 'gap_dif')
-    worst_gen = df_stats.nlargest(2, 'gap_dif')
-    best_improve = df_stats.nlargest(2, 'improve_test').iloc[[1]] # skip collie1
+
+    worst_pool = df_stats[df_stats['train_mar_med'] > 0.5]
+    worst_gen = worst_pool.nlargest(2, 'gap_mar_med') if not worst_pool.empty else df_stats.nlargest(2, 'gap_mar_med')
+    improve_pool = df_stats[df_stats['train_mar_med'] > 0.5]
+    if improve_pool.empty:
+        improve_pool = df_stats
+    best_improve = improve_pool.nlargest(1, 'improve_test')
 
     bbox_style = dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1.5)
 
-    def _label_rows(rows, color, use_baseline=False):
+    def _label_rows(rows, color, use_baseline=False, xy_offset=(0.0, 0.0)):
         for _, row in rows.iterrows():
             x_raw = row['train_mar_med'] if use_baseline else row['train_dif_med']
             y_raw = row['test_mar_med'] if use_baseline else row['test_dif_med']
             x = max(x_raw, clip_floor)
             y = max(y_raw, clip_floor)
             t = ax1.text(
-                x,
-                y,
+                x + xy_offset[0],
+                y + xy_offset[1],
                 _fmt_model(row['model']),
-                fontsize=10,
+                fontsize=9,
                 fontweight='bold',
                 color=color,
                 bbox=bbox_style,
             )
             texts.append(t)
 
-    _label_rows(best_improve, '#c1121f', use_baseline=True)   # 提升大：红字，标在 baseline 点
+    _label_rows(best_improve, '#c1121f', use_baseline=True, xy_offset=(0.006, 0.006))   # 提升大：红字，标在 baseline 点
     _label_rows(best_gen, '#000000', use_baseline=False)      # 泛化最好：黑字，标在 ours 点
     _label_rows(worst_gen, COLOR_OURS, use_baseline=False)    # 泛化差：蓝字（与散点一致），标在 ours 点
 
@@ -266,8 +271,8 @@ def plot_enhanced_generalization(df_stats):
 
     ax1.set_xlim(limit_min, limit_max)
     ax1.set_ylim(limit_min, limit_max)
-    ax1.set_xlabel('Training Performance ($KGE(Q)_{train}$)')
-    ax1.set_ylabel('Testing Performance ($KGE(Q)_{test}$)')
+    ax1.set_xlabel('Training Performance ($KGE(1/Q)_{train}$)')
+    ax1.set_ylabel('Testing Performance ($KGE(1/Q)_{test}$)')
     ax1.set_title('(a) Optimization Trajectories & Consistency', loc='left', fontweight='bold')
 
     ax1.annotate(
@@ -275,7 +280,7 @@ def plot_enhanced_generalization(df_stats):
         xy=(limit_min + 0.65 * (limit_max - limit_min), limit_min + 0.62 * (limit_max - limit_min)),
         xytext=(limit_min + 0.45 * (limit_max - limit_min), limit_min + 0.45 * (limit_max - limit_min)),
         arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0.2", color='#555555'),
-        fontsize=10,
+        fontsize=9,
         color='#555555',
         ha='center',
     )
@@ -286,9 +291,9 @@ def plot_enhanced_generalization(df_stats):
         for v in size_values
     ]
 
-    legend_main = ax1.legend(loc='upper left', frameon=True, fontsize=10)
+    legend_main = ax1.legend(loc='upper left', frameon=True, fontsize=9)
     ax1.add_artist(legend_main)
-    ax1.legend(handles=size_handles, labels=["≈5", "≈8", "≈10"], title='Marker Size', loc='lower right', frameon=True, fontsize=9, title_fontsize=10)
+    ax1.legend(handles=size_handles, labels=["≈5", "≈8", "≈10"], title='Marker Size', loc='lower right', frameon=True, fontsize=8, title_fontsize=9)
     # 仅保留右下角 Marker Size 图例，去掉额外文本避免遮挡
 
     # =======================================================
@@ -345,16 +350,16 @@ def plot_enhanced_generalization(df_stats):
 
     ax2.set_xticklabels(new_labels)
     ax2.set_xlabel('Model Complexity Group (Parameters)')
-    ax2.set_ylabel('Generalization Gap ($KGE(Q)_{train} - KGE(Q)_{test}$)')
+    ax2.set_ylabel('Generalization Gap ($KGE(1/Q)_{train} - KGE(1/Q)_{test}$)')
     ax2.set_title('(b) Stability Analysis by Complexity', loc='left', fontweight='bold')
     ax2.axhline(0, color='k', ls='-', lw=0.5)
 
     y_max = df_melt['gap'].max()
     ax2.plot([2 - 0.2, 2 + 0.2], [y_max + 0.01, y_max + 0.01], 'k-', lw=1)
-    ax2.text(2, y_max + 0.013, "Gap Reduced", ha='center', va='bottom', fontsize=10, fontweight='bold')
+    ax2.text(2, y_max + 0.013, "Gap Reduced", ha='center', va='bottom', fontsize=9, fontweight='bold')
 
     handles, _ = ax2.get_legend_handles_labels()
-    ax2.legend(handles=handles[:2], labels=['Baseline (MARRMoT)', 'Ours (dMoT)'], loc='upper left', fontsize=10, title_fontsize=11)
+    ax2.legend(handles=handles[:2], labels=['Baseline (MARRMoT)', 'Ours (dMoT)'], loc='upper left')
 
     return fig
 
@@ -362,7 +367,7 @@ def main():
     df_stats = load_data_for_generalization()
     fig = plot_enhanced_generalization(df_stats)
     cur_path = os.path.dirname(os.path.abspath(__file__))
-    plt.savefig(f"{cur_path}/figures/Figure_3_Complexity_Generalization.png", bbox_inches='tight')
+    plt.savefig(f"{cur_path}/figures/Figure_S1_Complexity_Generalization.png", bbox_inches='tight')
     plt.show()
 
 

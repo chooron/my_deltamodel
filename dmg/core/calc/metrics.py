@@ -2,12 +2,12 @@ import csv
 import json
 import logging
 import os
-from typing import Any, Optional
+from typing import Any, Iterable, Optional, Set
 
 import numpy as np
 import scipy.stats as stats
 from numpy.typing import NDArray
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 log = logging.getLogger()
 
@@ -23,6 +23,8 @@ class Metrics(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     pred: NDArray[np.float32]
     target: NDArray[np.float32]
+    metrics_to_compute: Optional[Set[str]] = Field(default=None, exclude=True)
+
     bias: NDArray[np.float32] = np.ndarray([])
     bias_rel: NDArray[np.float32] = np.ndarray([])
 
@@ -61,12 +63,14 @@ class Metrics(BaseModel):
         self,
         pred: NDArray[np.float32],
         target: NDArray[np.float32],
+        metrics_to_compute: Optional[Iterable[str]] = None,
     ) -> None:
         if pred.ndim == 1:
             pred = np.expand_dims(pred, axis=0)
         if target.ndim == 1:
             target = np.expand_dims(target, axis=0)
-        super().__init__(pred=pred, target=target)
+        mtc_set = set(metrics_to_compute) if metrics_to_compute is not None else None
+        super().__init__(pred=pred, target=target, metrics_to_compute=mtc_set)
 
     def model_post_init(self, __context: Any) -> Any:
         """Calculate metrics.
@@ -83,40 +87,68 @@ class Metrics(BaseModel):
         Any
             Context object.
         """
-        self.bias = self._bias(self.pred, self.target, offset=0.00001)
-        self.bias_rel = self._bias_rel(self.pred, self.target)
+        def wants(name: str) -> bool:
+            return self.metrics_to_compute is None or name in self.metrics_to_compute
 
-        self.rmse = self._rmse(self.pred, self.target)
-        self.rmse_ub = self._rmse_ub(self.pred, self.target)
-        self.rmse_fdc = self._rmse_fdc(self.pred, self.target)
+        if wants('bias'):
+            self.bias = self._bias(self.pred, self.target, offset=0.00001)
+        if wants('bias_rel'):
+            self.bias_rel = self._bias_rel(self.pred, self.target)
 
-        self.mae = self._mae(self.pred, self.target)
+        if wants('rmse'):
+            self.rmse = self._rmse(self.pred, self.target)
+        if wants('rmse_ub'):
+            self.rmse_ub = self._rmse_ub(self.pred, self.target)
+        if wants('rmse_fdc'):
+            self.rmse_fdc = self._rmse_fdc(self.pred, self.target)
 
-        self.corr = np.full(self.ngrid, np.nan)
-        self.corr_spearman = np.full(self.ngrid, np.nan)
-        self.r2 = np.full(self.ngrid, np.nan)
-        self.nse = np.full(self.ngrid, np.nan)
+        if wants('mae'):
+            self.mae = self._mae(self.pred, self.target)
 
-        self.flv = np.full(self.ngrid, np.nan)
-        self.fhv = np.full(self.ngrid, np.nan)
-        self.pbias = np.full(self.ngrid, np.nan)
-        self.pbias_mid = np.full(self.ngrid, np.nan)
+        if wants('corr'):
+            self.corr = np.full(self.ngrid, np.nan)
+        if wants('corr_spearman'):
+            self.corr_spearman = np.full(self.ngrid, np.nan)
+        if wants('r2') or wants('nse'):
+            self.r2 = np.full(self.ngrid, np.nan)
+            self.nse = np.full(self.ngrid, np.nan)
 
-        self.flv_abs = np.full(self.ngrid, np.nan)
-        self.fhv_abs = np.full(self.ngrid, np.nan)
-        self.pbias_abs = np.full(self.ngrid, np.nan)
-        self.pbias_abs_mid = np.full(self.ngrid, np.nan)
+        if wants('flv'):
+            self.flv = np.full(self.ngrid, np.nan)
+        if wants('fhv'):
+            self.fhv = np.full(self.ngrid, np.nan)
+        if wants('pbias'):
+            self.pbias = np.full(self.ngrid, np.nan)
+        if wants('pbias_mid'):
+            self.pbias_mid = np.full(self.ngrid, np.nan)
 
-        self.kge = np.full(self.ngrid, np.nan)
-        self.kge_12 = np.full(self.ngrid, np.nan)
-        self.inv_kge = np.full(self.ngrid, np.nan)
+        if wants('flv_abs'):
+            self.flv_abs = np.full(self.ngrid, np.nan)
+        if wants('fhv_abs'):
+            self.fhv_abs = np.full(self.ngrid, np.nan)
+        if wants('pbias_abs'):
+            self.pbias_abs = np.full(self.ngrid, np.nan)
+        if wants('pbias_abs_mid'):
+            self.pbias_abs_mid = np.full(self.ngrid, np.nan)
 
-        self.rmse_low = np.full(self.ngrid, np.nan)
-        self.rmse_mid = np.full(self.ngrid, np.nan)
-        self.rmse_high = np.full(self.ngrid, np.nan)
+        if wants('kge'):
+            self.kge = np.full(self.ngrid, np.nan)
+        if wants('kge_12'):
+            self.kge_12 = np.full(self.ngrid, np.nan)
+        if wants('inv_kge'):
+            self.inv_kge = np.full(self.ngrid, np.nan)
 
-        self.d_max = np.full(self.ngrid, np.nan)
-        self.d_max_rel = np.full(self.ngrid, np.nan)
+        if wants('rmse_low'):
+            self.rmse_low = np.full(self.ngrid, np.nan)
+        if wants('rmse_mid'):
+            self.rmse_mid = np.full(self.ngrid, np.nan)
+        if wants('rmse_high'):
+            self.rmse_high = np.full(self.ngrid, np.nan)
+
+        if wants('d_max'):
+            self.d_max = np.full(self.ngrid, np.nan)
+        if wants('d_max_rel'):
+            self.d_max_rel = np.full(self.ngrid, np.nan)
 
         for i in range(0, self.ngrid):
             _pred = self.pred[i]
@@ -142,44 +174,75 @@ class Metrics(BaseModel):
                 mid_target = target_sort[index_low:index_high]
                 high_target = target_sort[index_high:]
 
-                self.flv[i] = self._pbias(low_pred, low_target, offset=0.0001)
-                self.fhv[i] = self._pbias(high_pred, high_target)
-                self.pbias[i] = self._pbias(pred, target)
-                self.pbias_mid[i] = self._pbias(mid_pred, mid_target)
+                if wants('flv'):
+                    self.flv[i] = self._pbias(low_pred, low_target, offset=0.0001)
+                if wants('fhv'):
+                    self.fhv[i] = self._pbias(high_pred, high_target)
+                if wants('pbias'):
+                    self.pbias[i] = self._pbias(pred, target)
+                if wants('pbias_mid'):
+                    self.pbias_mid[i] = self._pbias(mid_pred, mid_target)
 
-                self.flv_abs[i] = self._pbias_abs(low_pred, low_target, offset=0.0001)
-                self.fhv_abs[i] = self._pbias_abs(high_pred, high_target)
-                self.pbias_abs[i] = self._pbias_abs(pred, target)
-                self.pbias_abs_mid[i] = self._pbias_abs(mid_pred, mid_target)
+                if wants('flv_abs'):
+                    self.flv_abs[i] = self._pbias_abs(low_pred, low_target, offset=0.0001)
+                if wants('fhv_abs'):
+                    self.fhv_abs[i] = self._pbias_abs(high_pred, high_target)
+                if wants('pbias_abs'):
+                    self.pbias_abs[i] = self._pbias_abs(pred, target)
+                if wants('pbias_abs_mid'):
+                    self.pbias_abs_mid[i] = self._pbias_abs(mid_pred, mid_target)
 
-                self.rmse_low[i] = self._rmse(low_pred, low_target, axis=0)
-                self.rmse_mid[i] = self._rmse(mid_pred, mid_target, axis=0)
-                self.rmse_high[i] = self._rmse(high_pred, high_target, axis=0)
+                if wants('rmse_low'):
+                    self.rmse_low[i] = self._rmse(low_pred, low_target, axis=0)
+                if wants('rmse_mid'):
+                    self.rmse_mid[i] = self._rmse(mid_pred, mid_target, axis=0)
+                if wants('rmse_high'):
+                    self.rmse_high[i] = self._rmse(high_pred, high_target, axis=0)
 
-                target_max = np.nanmax(target)
-                pred_max = self._pred_max(pred, target, lb=10, ub=11)
+                if wants('d_max') or wants('d_max_rel'):
+                    target_max = np.nanmax(target)
+                    pred_max = self._pred_max(pred, target, lb=10, ub=11)
+                    if wants('d_max'):
+                        self.d_max[i] = pred_max - target_max
+                    if wants('d_max_rel'):
+                        self.d_max_rel[i] = (pred_max - target_max) / target_max * 100
 
-                self.d_max[i] = pred_max - target_max
-                self.d_max_rel[i] = (pred_max - target_max) / target_max * 100
+                need_corr = any(
+                    wants(name) for name in ['corr', 'corr_spearman', 'kge', 'kge_12', 'inv_kge']
+                )
+                need_nse_r2 = wants('nse') or wants('r2')
 
-                if idx.shape[0] > 1:
-                    # At least two points needed for correlation.
-                    self.corr[i] = self._corr(pred, target)
-                    self.corr_spearman[i] = self._corr_spearman(pred, target)
+                if idx.shape[0] > 1 and (need_corr or need_nse_r2):
+                    corr_val = None
+                    if need_corr:
+                        corr_val = self._corr(pred, target)
+                        if wants('corr'):
+                            self.corr[i] = corr_val
+                        if wants('corr_spearman'):
+                            self.corr_spearman[i] = self._corr_spearman(pred, target)
 
                     _pred_mean = pred.mean()
                     _target_mean = target.mean()
                     _pred_std = np.std(pred)
                     _target_std = np.std(target)
-                    self.kge[i] = self._kge(
-                        _pred_mean, _target_mean, _pred_std, _target_std, self.corr[i],
-                    )
-                    self.kge_12[i] = self._kge_12(
-                        _pred_mean, _target_mean, _pred_std, _target_std, self.corr[i],
-                    )
-                    self.inv_kge[i] = self._inv_kge(pred, target)
 
-                    self.nse[i] = self.r2[i] = self._nse_r2(pred, target, _target_mean)
+                    if wants('kge'):
+                        self.kge[i] = self._kge(
+                            _pred_mean, _target_mean, _pred_std, _target_std, corr_val or self._corr(pred, target),
+                        )
+                    if wants('kge_12'):
+                        self.kge_12[i] = self._kge_12(
+                            _pred_mean, _target_mean, _pred_std, _target_std, corr_val or self._corr(pred, target),
+                        )
+                    if wants('inv_kge'):
+                        self.inv_kge[i] = self._inv_kge(pred, target)
+
+                    if need_nse_r2:
+                        nse_val, r2_val = self._nse_r2(pred, target, _target_mean)
+                        if wants('nse'):
+                            self.nse[i] = nse_val
+                        if wants('r2'):
+                            self.r2[i] = r2_val
 
         return super().model_post_init(__context)
 
@@ -217,6 +280,10 @@ class Metrics(BaseModel):
         model_dict.pop('pred', None)
         model_dict.pop('target', None)
 
+        if self.metrics_to_compute is not None:
+            allowed = self.metrics_to_compute
+            model_dict = {k: v for k, v in model_dict.items() if k in allowed}
+
         # Calculate statistics
         for key, value in model_dict.items():
             if isinstance(value, np.ndarray) and value.size > 0:
@@ -252,16 +319,22 @@ class Metrics(BaseModel):
     def model_dump_json(self, *args, **kwargs) -> str:
         """Dump raw metrics to json."""
         model_dict = self.model_dump()
-        for key, value in model_dict.items():
+
+        # Keep only requested metrics if a subset was specified
+        if self.metrics_to_compute is not None:
+            allowed = self.metrics_to_compute
+            model_dict = {k: v for k, v in model_dict.items() if k in allowed}
+
+        # Convert ndarray to list for JSON serialization
+        for key, value in list(model_dict.items()):
             if isinstance(value, np.ndarray):
-                setattr(self, key, value.tolist())
+                model_dict[key] = value.tolist()
 
-        if hasattr(self, 'pred'):
-            del self.pred
-        if hasattr(self, 'target'):
-            del self.target
+        # Drop raw predictions/targets to keep output compact
+        model_dict.pop('pred', None)
+        model_dict.pop('target', None)
 
-        return super().model_dump_json(*args, **kwargs)
+        return json.dumps(model_dict, *args, **kwargs)
 
     def dump_metrics(self, path: str) -> None:
         """Dump all metrics and aggregate statistics (median, mean, std) to json.
@@ -501,7 +574,7 @@ class Metrics(BaseModel):
         - transform: 1 / (flow + epsilon)
         - apply standard KGE on transformed values with small stability eps
         """
-
+        # clamp to non-negative for safety
         if pred.size == 0 or target.size == 0:
             return np.nan
 
@@ -509,6 +582,7 @@ class Metrics(BaseModel):
         pred_safe = np.clip(pred, a_min=0.0, a_max=None)
         target_safe = np.clip(target, a_min=0.0, a_max=None)
 
+        # 1% 均值法则，但不仅限于此
         eps_dyn = max(0.01 * float(np.mean(target_safe)), 1e-3)
 
         pred_inv = 1.0 / (pred_safe + eps_dyn)
@@ -540,7 +614,8 @@ class Metrics(BaseModel):
         target: NDArray[np.float32],
         target_mean: np.float32,
     ) -> tuple[np.float32, np.float32]:
-        """Calculate Nash-Sutcliffe Efficiency (NSE) == R^2."""
+        """Calculate Nash-Sutcliffe Efficiency (NSE) and R^2 (identical here)."""
         sst = np.sum((target - target_mean) ** 2)
         ssres = np.sum((target - pred) ** 2)
-        return 1 - ssres / sst
+        nse_val = np.float32(1 - ssres / sst)
+        return nse_val, nse_val

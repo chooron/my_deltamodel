@@ -107,7 +107,7 @@ def initialize_config(
     # Convert date ranges to integer values.
     train_time = Dates(config['train'], config['delta_model']['rho'])
     test_time = Dates(config['test'], config['delta_model']['rho'])
-    sim_time = Dates(config['simulation'], config['delta_model']['rho'])
+    sim_time = Dates(config['simulation'], min(365, config['delta_model']['rho']))
     all_time = Dates(config['observations'], config['delta_model']['rho'])
 
     exp_time_start = min(

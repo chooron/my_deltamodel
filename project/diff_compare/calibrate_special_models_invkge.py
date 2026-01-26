@@ -18,7 +18,6 @@ from dmg.core.utils import (  # noqa: E402
 from project.diff_compare import load_config  # noqa: E402
 
 
-CONFIG_PATH = r"conf/config_dspecial_calibrate.yml"
 
 # 需要遍历的模型（首字母大写）
 SPECIAL_MODELS = [
@@ -38,15 +37,16 @@ SPECIAL_MODELS = [
 
 def run_one(model_name: str) -> None:
     """Train + evaluate a single model."""
+    CONFIG_PATH = r"conf/config_dspecial_calibrate_invkge.yml"
     # 重新读取配置，避免跨模型污染
     with open(
-        f"{proj_path}/project/diff_compare/conf/config_dspecial_calibrate.yaml", "r"
+        f"{proj_path}/project/diff_compare/conf/config_dspecial_calibrate_invkge.yaml", "r"
     ) as f:
         config = yaml.safe_load(f)
     config["delta_model"]["phy_model"]["model"][0] = model_name
 
     with open(
-        f"{proj_path}/project/diff_compare/conf/config_dspecial_calibrate.yaml", "w"
+        f"{proj_path}/project/diff_compare/conf/config_dspecial_calibrate_invkge.yaml", "w"
     ) as f:
         yaml.safe_dump(config, f, default_flow_style=False)
     set_randomseed(config["random_seed"])

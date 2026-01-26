@@ -109,6 +109,10 @@ class CalTrainer(BaseTrainer):
             # self.start_epoch = self.config['train']['start_epoch'] + 1
             # if self.start_epoch > 1:
             self.load_states()
+        elif "test" in config["mode"]:
+            self.load_test_states()
+
+        
 
     def init_optimizer(self) -> torch.optim.Optimizer:
         """Initialize a state optimizer.
@@ -187,9 +191,8 @@ class CalTrainer(BaseTrainer):
         path = self.config["model_path"]
         for file in os.listdir(path):
             # Check for state checkpoint: looks like `train_state_epoch_XX.pt`.
-            if (
-                "train_state" in file
-            ):  # and (str(self.start_epoch - 1) in file):
+            if "train_state" in file:
+                # and (str(self.start_epoch - 1) in file):
                 # log.info("Loading trainer states --> Resuming Training from" /
                 #          f" epoch {self.start_epoch}")
 
@@ -221,6 +224,31 @@ class CalTrainer(BaseTrainer):
                 return
             else:
                 self.start_epoch = 1
+
+    def load_test_states(self) -> None:
+        """
+        Load model states for testing using the specified test epoch.
+
+        This is separate from load_states to avoid modifying training logic.
+        """
+        path = self.config["model_path"]
+        test_epoch = self.config["test"].get("test_epoch", None)
+
+        if test_epoch is None:
+            raise ValueError("'test_epoch' must be set in config['test'].")
+
+        # Load model by explicit file name format: d{model}_Ep{epoch}.pt
+        model_name = self.config["delta_model"]["phy_model"]["model"]
+        if isinstance(model_name, list):
+            model_name = model_name[0]
+
+        checkpoint_file = f"d{model_name}_Ep{int(test_epoch)}.pt"
+        checkpoint_path = os.path.join(path, checkpoint_file)
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"{checkpoint_path} not found.")
+
+        self.model.load_model(epoch=int(test_epoch))
+        print(f"Loaded test checkpoint: {checkpoint_path}")
 
     def train(self) -> None:
         """Train the model."""
@@ -585,11 +613,12 @@ class CalTrainer(BaseTrainer):
         # Remove warm-up data
         target = target[self.config["delta_model"]["phy_model"]["warm_up"] :, :]
         target = target[: len(predictions), :]
-
         # Compute metrics
+        metrics_to_compute = self.config["test"].get("metrics", None)
         metrics = Metrics(
             np.swapaxes(predictions.squeeze(), 1, 0),
             np.swapaxes(target.squeeze(), 1, 0),
+            metrics_to_compute,
         )
 
         # Save all metrics and aggregated statistics.

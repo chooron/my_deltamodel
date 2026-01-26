@@ -3,6 +3,7 @@ import sys
 import yaml
 import gc
 import torch
+from pathlib import Path
 # torch.autograd.set_detect_anomaly(True)
 from dotenv import load_dotenv
 
@@ -64,9 +65,9 @@ def main(model_name):
         f"{proj_path}/project/diff_compare/conf/config_dhbv_calibrate.yaml", "w"
     ) as f:
         yaml.safe_dump(config, f, default_flow_style=False)
+    config = load_config(CONFIG_PATH)
     # ------------------------------------------#
     # model training
-    config = load_config(CONFIG_PATH)
     config["mode"] = "train"
     set_randomseed(config["random_seed"])
     model = ModelHandler(config, verbose=True)
@@ -82,7 +83,7 @@ def main(model_name):
 
     # model evaluation
     config["mode"] = "test"
-    config["test"]["test_epoch"] = 50
+    config["test"]["test_epoch"] = 100
     set_randomseed(config["random_seed"])
 
     model = ModelHandler(config, verbose=True)
@@ -92,6 +93,9 @@ def main(model_name):
     print("Evaluating model...")
     config["test"]["start_time"] = "1989/01/01"
     config["test"]["end_time"] = "1998/12/31"
+    base_outpath = Path(config["out_path"]).parents[0]
+    config["out_path"] = base_outpath / "train1989-1998_Ep100"
+    config["out_path"].mkdir(parents=True, exist_ok=True)
     trainer_cls = import_trainer(config["trainer"])
     trainer = trainer_cls(
         config,
@@ -105,6 +109,8 @@ def main(model_name):
 
     config["test"]["start_time"] = "1999/01/01"
     config["test"]["end_time"] = "2009/12/31"
+    config["out_path"] = base_outpath / "test1999-2009_Ep100"
+    config["out_path"].mkdir(parents=True, exist_ok=True)
     tester = trainer_cls(
         config,
         model,
@@ -139,15 +145,17 @@ if __name__=='__main__':
 
     print(f"{'='*20} Batch Calibration Start {'='*20}")
 
-    # for nm in AVAILABLE_MODELs:
+    # for nm in AVAILABLE_MODELs[::-1]:
+    # AVAILABLE_MODELs = [ 'us1','topmodel','tcm','tank','susannah2','susannah1','simhyd']
+    # tcm
     for nm in ['tcm']:
         if nm not in SPECIAL_MODELS:
             print(f"\n[Processing] Calibrating {nm} model...")
-            
             try:
-                # 2. 尝试运行主逻辑
+            # 2. 尝试运行主逻辑
                 main(nm)
                 print(f"[Success] {nm} finished.")
+                clear_memory()
             except Exception as e:
                 # 3. 捕获任何异常 (Exception)
                 error_message = str(e)
@@ -162,10 +170,6 @@ if __name__=='__main__':
                     "error": error_message,
                     "traceback": error_trace
                 })
-                
-                # 5. 继续循环 (continue 其实可以省略，因为 except 结束后自然会进入下一次循环，但写上更清晰)
-                continue
-
     # ==========================================================
     # 6. 运行结束后生成总结报告
     # ==========================================================

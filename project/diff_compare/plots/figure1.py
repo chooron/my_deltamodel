@@ -7,8 +7,10 @@ from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
 # --- 1. 绘图风格设置 ---
 plt.rcParams.update({
-    'font.family': 'sans-serif',
-    'font.sans-serif': ['Arial', 'DejaVu Sans'],
+    # 核心字体设置
+    'font.family': 'serif',             # 声明使用衬线字体
+    'font.serif': ['STIXGeneral'],  # 指定具体的衬线字体为 Times New Roman
+    'mathtext.fontset': 'stix',  
     'font.size': 10,
     'axes.labelsize': 11,
     'xtick.labelsize': 10,
@@ -36,50 +38,50 @@ def load_and_align_data():
     csv_dir = os.path.join(base_dir, "csv")
 
     # Primary KGE
-    path_cpu_kge = os.path.join(csv_dir, "marrmot_test_kge.csv")
-    path_gpu_kge = os.path.join(csv_dir, "dif_test_kge.csv")
+    path_marrmot_kge = os.path.join(csv_dir, "marrmot_test_kge.csv")
+    path_dmot_kge = os.path.join(csv_dir, "dif_test_kge.csv")
 
     # Inverse KGE (optional)
-    path_cpu_invkge = os.path.join(csv_dir, "marrmot_test_invkge.csv")
-    path_gpu_invkge = os.path.join(csv_dir, "dif_test_invkge.csv")
+    path_marrmot_invkge = os.path.join(csv_dir, "marrmot_test_invkge.csv")
+    path_dmot_invkge = os.path.join(csv_dir, "dif_test_invkge.csv")
 
-    print(f"Loading CPU KGE: {path_cpu_kge}")
-    print(f"Loading GPU KGE: {path_gpu_kge}")
+    print(f"Loading MARRMoT KGE: {path_marrmot_kge}")
+    print(f"Loading dMoT KGE: {path_dmot_kge}")
 
-    df_cpu_kge = pd.read_csv(path_cpu_kge, index_col=0)
-    df_gpu_kge = pd.read_csv(path_gpu_kge, index_col=0)
+    df_marrmot_kge = pd.read_csv(path_marrmot_kge, index_col=0)
+    df_dmot_kge = pd.read_csv(path_dmot_kge, index_col=0)
 
-    df_cpu_kge.columns = [clean_model_name(c) for c in df_cpu_kge.columns]
-    df_gpu_kge.columns = [clean_model_name(c) for c in df_gpu_kge.columns]
+    df_marrmot_kge.columns = [clean_model_name(c) for c in df_marrmot_kge.columns]
+    df_dmot_kge.columns = [clean_model_name(c) for c in df_dmot_kge.columns]
 
-    common_models_kge = df_cpu_kge.columns.intersection(df_gpu_kge.columns)
-    common_basins_kge = df_cpu_kge.index.intersection(df_gpu_kge.index)
+    common_models_kge = df_marrmot_kge.columns.intersection(df_dmot_kge.columns)
+    common_basins_kge = df_marrmot_kge.index.intersection(df_dmot_kge.index)
 
-    aligned_cpu_kge = df_cpu_kge.loc[common_basins_kge, common_models_kge]
-    aligned_gpu_kge = df_gpu_kge.loc[common_basins_kge, common_models_kge]
+    aligned_marrmot_kge = df_marrmot_kge.loc[common_basins_kge, common_models_kge]
+    aligned_dmot_kge = df_dmot_kge.loc[common_basins_kge, common_models_kge]
 
-    aligned_cpu_invkge = None
-    aligned_gpu_invkge = None
+    aligned_marrmot_invkge = None
+    aligned_dmot_invkge = None
 
-    if os.path.exists(path_cpu_invkge) and os.path.exists(path_gpu_invkge):
-        print(f"Loading CPU invKGE: {path_cpu_invkge}")
-        print(f"Loading GPU invKGE: {path_gpu_invkge}")
+    if os.path.exists(path_marrmot_invkge) and os.path.exists(path_dmot_invkge):
+        print(f"Loading MARRMoT invKGE: {path_marrmot_invkge}")
+        print(f"Loading dMoT invKGE: {path_dmot_invkge}")
 
-        df_cpu_invkge = pd.read_csv(path_cpu_invkge, index_col=0)
-        df_gpu_invkge = pd.read_csv(path_gpu_invkge, index_col=0)
+        df_marrmot_invkge = pd.read_csv(path_marrmot_invkge, index_col=0)
+        df_dmot_invkge = pd.read_csv(path_dmot_invkge, index_col=0)
 
-        df_cpu_invkge.columns = [clean_model_name(c) for c in df_cpu_invkge.columns]
-        df_gpu_invkge.columns = [clean_model_name(c) for c in df_gpu_invkge.columns]
+        df_marrmot_invkge.columns = [clean_model_name(c) for c in df_marrmot_invkge.columns]
+        df_dmot_invkge.columns = [clean_model_name(c) for c in df_dmot_invkge.columns]
 
-        common_models_inv = df_cpu_invkge.columns.intersection(df_gpu_invkge.columns)
-        common_basins_inv = df_cpu_invkge.index.intersection(df_gpu_invkge.index)
+        common_models_inv = df_marrmot_invkge.columns.intersection(df_dmot_invkge.columns)
+        common_basins_inv = df_marrmot_invkge.index.intersection(df_dmot_invkge.index)
 
-        aligned_cpu_invkge = df_cpu_invkge.loc[common_basins_inv, common_models_inv]
-        aligned_gpu_invkge = df_gpu_invkge.loc[common_basins_inv, common_models_inv]
+        aligned_marrmot_invkge = df_marrmot_invkge.loc[common_basins_inv, common_models_inv]
+        aligned_dmot_invkge = df_dmot_invkge.loc[common_basins_inv, common_models_inv]
     else:
         print("invKGE files not found; skipping panel (b)")
 
-    return aligned_cpu_kge, aligned_gpu_kge, aligned_cpu_invkge, aligned_gpu_invkge
+    return aligned_marrmot_kge, aligned_dmot_kge, aligned_marrmot_invkge, aligned_dmot_invkge
 
 # ==========================================
 # 3. 核心绘图函数 (已针对直方图美观度优化)
@@ -155,7 +157,10 @@ def plot_joint_panel(fig, outer_grid_pos, x, y, x_med, y_med, xlabel, ylabel, pa
     
     ax_main.set_xlabel(xlabel)
     ax_main.set_ylabel(ylabel)
-    ax_histx.set_title(panel_title, loc='left', fontsize=11, fontweight='bold', pad=8)
+
+    # 面板标注放在主图右下角，避免挤占上方空间
+    ax_main.text(0.97, 0.03, panel_title, transform=ax_main.transAxes, ha='right', va='bottom',
+                 fontsize=11, fontweight='bold')
 
     # --- B. 边缘分布图 (解决 直线/扁平 问题) ---
     # 核心修复：只提取 limit 范围内的数据给 KDE。
@@ -205,21 +210,21 @@ def plot_joint_panel(fig, outer_grid_pos, x, y, x_med, y_med, xlabel, ylabel, pa
 # ==========================================
 # 4. 执行
 # ==========================================
-df_cpu_kge, df_gpu_kge, df_cpu_invkge, df_gpu_invkge = load_and_align_data()
+df_marrmot_kge, df_dmot_kge, df_marrmot_invkge, df_dmot_invkge = load_and_align_data()
 
 # KGE(Q)
-x_flat = df_cpu_kge.values.flatten()
-y_flat = df_gpu_kge.values.flatten()
-x_med = df_cpu_kge.median(axis=0).values
-y_med = df_gpu_kge.median(axis=0).values
+x_flat = df_marrmot_kge.values.flatten()
+y_flat = df_dmot_kge.values.flatten()
+x_med = df_marrmot_kge.median(axis=0).values
+y_med = df_dmot_kge.median(axis=0).values
 
 # KGE(1/Q) if available
-has_invkge = df_cpu_invkge is not None and df_gpu_invkge is not None
+has_invkge = df_marrmot_invkge is not None and df_dmot_invkge is not None
 if has_invkge:
-    x_flat_inv = df_cpu_invkge.values.flatten()
-    y_flat_inv = df_gpu_invkge.values.flatten()
-    x_med_inv = df_cpu_invkge.median(axis=0).values
-    y_med_inv = df_gpu_invkge.median(axis=0).values
+    x_flat_inv = df_marrmot_invkge.values.flatten()
+    y_flat_inv = df_dmot_invkge.values.flatten()
+    x_med_inv = df_marrmot_invkge.median(axis=0).values
+    y_med_inv = df_dmot_invkge.median(axis=0).values
 
 # === 关键设置 ===
 # 手动锁死显示范围，忽略 -12241 这种异常值
@@ -239,7 +244,7 @@ outer_gs = GridSpec(1, n_panels, figure=fig, width_ratios=[1] * n_panels,
 hb1 = plot_joint_panel(fig, outer_gs[0],
                         x_flat, y_flat,
                         x_med, y_med,
-                        r"KGE(Q)_{CPU}", r"KGE(Q)_{GPU}", "(a) KGE(Q)",
+                        "Baseline (MARRMoT)", "Ours (dMoT)", "(a) KGE(Q)",
                         limit_min=LIMIT_MIN, limit_max=LIMIT_MAX)
 
 # Panel (b) - KGE(1/Q) if data exists
@@ -248,7 +253,7 @@ if has_invkge:
     hb2 = plot_joint_panel(fig, outer_gs[1],
                            x_flat_inv, y_flat_inv,
                            x_med_inv, y_med_inv,
-                           r"KGE(1/Q)_{CPU}", r"KGE(1/Q)_{GPU}", "(b) KGE(1/Q)",
+                           "Baseline (MARRMoT)", "Ours (dMoT)", "(b) KGE(1/Q)",
                            limit_min=LIMIT_MIN, limit_max=LIMIT_MAX)
 
 # Colorbar

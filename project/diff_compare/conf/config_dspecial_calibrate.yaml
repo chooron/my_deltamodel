@@ -59,7 +59,7 @@ delta_model:
     - tmean
     - pet
     model:
-    - Mopex5
+    - Gr4j
     nearzero: 1e-6
     nmul: 128
     use_log_norm: []
@@ -80,6 +80,10 @@ simulation:
 test:
   batch_size: 100
   end_time: 2009/12/31
+  metrics:
+  - nse
+  - kge
+  - inv_kge
   split_dataset: false
   start_time: 1999/01/01
   test_epoch: 100

@@ -42,7 +42,7 @@ delta_model:
     - carbonate_rocks_frac
     - geol_porosity
     - geol_permeability
-    batch_size: 100
+    batch_size: 200
     dr: 0.0
     forcings:
     - prcp
@@ -60,9 +60,9 @@ delta_model:
     - pet
     model:
     - UnifyV2
-    model_name: gr4j
+    model_name: collie1
     nearzero: 1e-6
-    nmul: 16
+    nmul: 256
     use_log_norm: []
     warm_up: 365
     warm_up_states: false
@@ -70,11 +70,10 @@ delta_model:
 device: cuda
 gpu_id: 0
 loss_function:
-  model: KgeLoss
+  model: KgeInverseLoss
 mode: train
 random_seed: 42
-save_output: true
-save_path: project/diff_compare/output
+save_path: project/diff_compare/ablation/nmul
 simulation:
   batch_size: 25
   end_time: 2014/09/30
@@ -82,23 +81,25 @@ simulation:
 test:
   batch_size: 100
   end_time: 2009/12/31
+  metrics:
+  - inv_kge
   split_dataset: false
   start_time: 1999/01/01
-  test_epoch: 10
+  test_epoch: 100
 train:
-  batch_size: 100
+  batch_size: 200
   end_time: 1998/12/31
-  epochs: 10
+  epochs: 100
   learning_rate: 1.0
   lr_scheduler: None
   lr_scheduler_params:
     gamma: 0.5
     step_size: 10
   optimizer: Adadelta
-  save_epoch: 10
+  save_epoch: 1
   start_epoch: 0
   start_time: 1989/01/01
   target:
   - streamflow
-trained_model: project/diff_compare/output/model/
+trained_model: project/diff_compare/ablation/batchsize/model/
 trainer: CalTrainer

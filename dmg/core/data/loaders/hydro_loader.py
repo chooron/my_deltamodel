@@ -236,7 +236,6 @@ class HydroLoader(BaseLoader):
 
         # if using camels_559, change the pet formula (Priestley-Taylor)
         if self.config["observations"]["name"] == "camels_559":
-            print("using forcing version 2")
             datav2_path = os.path.join(
                 os.getenv("DATA_PATH", "."), "camels_forcing_v2.pkl"
             )

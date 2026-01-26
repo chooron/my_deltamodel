@@ -59,7 +59,7 @@ class TestGlobalWaterBalance(unittest.TestCase):
         print(f"\n🚀 Starting Global Water Balance Check (Tolerance: {TOLERANCE_MM} mm)...")
 
         # 过滤掉特殊模型
-        test_models = ['tcm']
+        test_models = ['gr4j']
         
         passed_count = 0
         skipped_count = 0

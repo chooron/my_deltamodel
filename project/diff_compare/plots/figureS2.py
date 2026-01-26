@@ -50,14 +50,14 @@ FILE_CONFIG = {
 # ==========================================
 plt.rcParams.update(
     {
-        'font.family': 'serif',             # 声明使用衬线字体
-        'font.serif': ['STIXGeneral'],  # 指定具体的衬线字体为 Times New Roman
-        'mathtext.fontset': 'stix',  
-        "font.size": 10,
-        "axes.labelsize": 10,
-        "axes.titlesize": 11,
-        "xtick.labelsize": 9,
-        "ytick.labelsize": 9,
+        "font.family": "serif",
+        'font.serif': ['STIXGeneral'],
+        'mathtext.fontset': 'stix',   
+        "font.size": 12,
+        "axes.labelsize": 12,
+        "axes.titlesize": 13,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
         "figure.dpi": 300,
         "axes.linewidth": 0.8,
         "scatter.edgecolors": "none",
@@ -71,8 +71,8 @@ VMIN, VMAX = -0.2, 0.2
 norm = mcolors.TwoSlopeNorm(vmin=VMIN, vcenter=0, vmax=VMAX)
 COLOR_GAIN = "#D64045"  # Red for gain
 COLOR_LOSS = "#2274A5"  # Blue for loss
-Y_LIMITS = (-4, 10)  # Adjustable y-axis limits for ranked curves
-LEFT_Y_LIMITS = (-1.0, 2.5)  # Tighter range for primary (left) axis
+Y_LIMITS = (-0.1, 2.0)  # Adjustable y-axis limits for ranked curves
+LEFT_Y_LIMITS = (-0.05, 1.0)  # Tighter range for primary (left) axis
 
 # ==========================================
 # 2. 数据处理函数
@@ -116,7 +116,7 @@ def load_and_process_data():
     1. 读取 559 ID 列表
     2. 读取 Shapefile 并过滤
     3. 读取 Normal 和 Log 的 CSV
-    4. 计算 Delta (Dif - Mar)
+    4. 计算各方法的最大值并取差 (max_dif - max_mar)
     5. 按 Simple/Complex/All 分组聚合
     """
     print("Loading data...")
@@ -155,9 +155,9 @@ def load_and_process_data():
     # 设置 gage_id 为索引，方便后续 join
     gdf = gdf.set_index("gage_id")
 
-    # 3. Load Metrics & Calculate Delta
-    # 容器用于存储不同流况的聚合数据
-    metrics_map = {}  # {'norm': df_delta, 'log': df_delta}
+    # 3. Load Metrics (store dif & mar separately for max-based delta later)
+    # 结构: metrics_map[flow_type]['dif'|'mar'] = DataFrame
+    metrics_map = {}
 
     for flow_type, paths in FILE_CONFIG.items():
         if not paths["dif"].exists() or not paths["mar"].exists():
@@ -175,17 +175,20 @@ def load_and_process_data():
         df_dif = df_dif[df_dif["basin_id"].isin(valid_ids)].set_index("basin_id")
         df_mar = df_mar[df_mar["basin_id"].isin(valid_ids)].set_index("basin_id")
 
-        # 计算 Delta (dMoT - MARRMoT)
         # 确保列名一致
         common_cols = df_dif.columns.intersection(df_mar.columns)
-        df_delta = df_dif[common_cols] - df_mar[common_cols]
-        metrics_map[flow_type] = df_delta
+        metrics_map[flow_type] = {
+            "dif": df_dif[common_cols],
+            "mar": df_mar[common_cols],
+        }
 
     if not metrics_map:
         raise ValueError("No valid metric data loaded.")
 
     # 4. Group Models
-    all_models = metrics_map["norm"].columns.tolist()
+    # 取首个流况的列作为模型列表（dif/mar 列名一致）
+    first_flow = next(iter(metrics_map.values()))
+    all_models = first_flow["dif"].columns.tolist()
     param_counts = {m: _get_param_count(m) for m in all_models}
 
     groups = {
@@ -198,7 +201,7 @@ def load_and_process_data():
         f"Model Groups: All({len(groups['All'])}), Simple({len(groups['Simple'])}), Complex({len(groups['Complex'])})"
     )
 
-    # 5. Aggregate per Basin (Mean across models in group)
+    # 5. Aggregate per Basin (Max across models, then take dif - mar)
     # 结果结构: data_ready[row_name][col_name] = Series(index=basin_id)
     data_ready = {}
 
@@ -207,22 +210,25 @@ def load_and_process_data():
 
         # Normal Flow Delta
         if "norm" in metrics_map:
-            cols_norm = _resolve_model_list(model_list, metrics_map["norm"].columns)
+            cols_norm = _resolve_model_list(
+                model_list, metrics_map["norm"]["dif"].columns
+            )
             if cols_norm:
-                # axis=1 mean: 对每个流域，计算该组模型的平均提升
-                data_ready[group_name]["norm"] = metrics_map["norm"][
-                    cols_norm
-                ].mean(axis=1)
+                max_dif = metrics_map["norm"]["dif"][cols_norm].max(axis=1)
+                max_mar = metrics_map["norm"]["mar"][cols_norm].max(axis=1)
+                data_ready[group_name]["norm"] = max_dif - max_mar
             else:
                 data_ready[group_name]["norm"] = pd.Series(dtype=float)
 
         # Low Flow Delta
         if "log" in metrics_map:
-            cols_log = _resolve_model_list(model_list, metrics_map["log"].columns)
+            cols_log = _resolve_model_list(
+                model_list, metrics_map["log"]["dif"].columns
+            )
             if cols_log:
-                data_ready[group_name]["log"] = metrics_map["log"][cols_log].mean(
-                    axis=1
-                )
+                max_dif = metrics_map["log"]["dif"][cols_log].max(axis=1)
+                max_mar = metrics_map["log"]["mar"][cols_log].max(axis=1)
+                data_ready[group_name]["log"] = max_dif - max_mar
             else:
                 data_ready[group_name]["log"] = pd.Series(dtype=float)
 
@@ -479,7 +485,7 @@ def main():
         cur_dir = Path(__file__).resolve().parents[0]
 
         # 3. 保存
-        save_path_png = cur_dir / Path("figures/Figure_4_Spatial_Stats.png")
+        save_path_png = cur_dir / Path("figures/Figure_S2_Spatial_Stats.png")
 
         if not save_path_png.parent.exists():
             save_path_png.parent.mkdir(parents=True)
