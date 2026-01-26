@@ -18,7 +18,7 @@ from typing import Any, Optional, Union, Dict, List, Tuple
 import torch
 import torch.nn as nn
 from dmg.models.hydrodl2 import change_param_range
-from dmg.models.hydromodel import PARAM_INFO, STFN_INFO, INIT_INFO, STATE_INFO
+from dmg.models.phy_models.core import PARAM_INFO, STFN_INFO, INIT_INFO, STATE_INFO
 
 
 class UnifyV1(nn.Module):
@@ -76,6 +76,7 @@ class UnifyV1(nn.Module):
         for attr in ["warm_up", "warm_up_states", "variables", "nearzero", "nmul"]:
             if attr in config:
                 setattr(self, attr, config[attr])
+        self.check_water_balance = config.get("check_water_balance", False)
 
     def _set_parameters(self) -> None:
         self.phy_param_names = list(self.parameter_bounds.keys())
