@@ -80,13 +80,13 @@ simulation:
   start_time: 2012/10/01
 test:
   batch_size: 100
-  end_time: 2009/12/31
+  end_time: 1998/12/31
   metrics:
   - nse
   - kge
   - inv_kge
   split_dataset: true
-  start_time: 1999/01/01
+  start_time: 1989/01/01
   test_epoch: 100
 train:
   batch_size: 100

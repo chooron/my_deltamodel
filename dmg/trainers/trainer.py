@@ -29,10 +29,10 @@ class Trainer(BaseTrainer):
     """Generic, unified trainer for neural networks and differentiable models.
 
     Inspired by the Hugging Face Trainer class.
-    
+
     Retrieves and formats data, initializes optimizers/schedulers/loss functions,
     and runs training and testing/inference loops.
-    
+
     Parameters
     ----------
     config
@@ -60,16 +60,16 @@ class Trainer(BaseTrainer):
     """
 
     def __init__(
-            self,
-            config: dict[str, Any],
-            model: torch.nn.Module = None,
-            train_dataset: Optional[dict] = None,
-            eval_dataset: Optional[dict] = None,
-            dataset: Optional[dict] = None,
-            loss_func: Optional[torch.nn.Module] = None,
-            optimizer: Optional[torch.optim.Optimizer] = None,
-            scheduler: Optional[torch.nn.Module] = None,
-            verbose: Optional[bool] = False,
+        self,
+        config: dict[str, Any],
+        model: torch.nn.Module = None,
+        train_dataset: Optional[dict] = None,
+        eval_dataset: Optional[dict] = None,
+        dataset: Optional[dict] = None,
+        loss_func: Optional[torch.nn.Module] = None,
+        optimizer: Optional[torch.optim.Optimizer] = None,
+        scheduler: Optional[torch.nn.Module] = None,
+        verbose: Optional[bool] = False,
     ) -> None:
         self.config = config
         self.model = model or ModelHandler(config)
@@ -79,27 +79,27 @@ class Trainer(BaseTrainer):
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.verbose = verbose
-        self.sampler = import_data_sampler(config['data_sampler'])(config)
+        self.sampler = import_data_sampler(config["data_sampler"])(config)
         self.is_in_train = False
 
-        if 'train' in config['mode']:
+        if "train" in config["mode"]:
             if not self.train_dataset:
                 raise ValueError("'train_dataset' required for training mode.")
 
             log.info("Initializing experiment")
-            self.epochs = self.config['train']['epochs']
+            self.epochs = self.config["train"]["epochs"]
 
             # Loss function
             self.loss_func = loss_func or load_criterion(
-                self.train_dataset['target'],
-                config['loss_function'],
-                device=config['device'],
+                self.train_dataset["target"],
+                config["loss_function"],
+                device=config["device"],
             )
             self.model.loss_func = self.loss_func
 
             # Optimizer and learning rate scheduler
             self.optimizer = optimizer or self.init_optimizer()
-            if config['delta_model']['nn_model']['lr_scheduler']:
+            if config["delta_model"]["nn_model"]["lr_scheduler"]:
                 self.use_scheduler = True
                 self.scheduler = scheduler or self.init_scheduler()
             else:
@@ -112,7 +112,7 @@ class Trainer(BaseTrainer):
 
     def init_optimizer(self) -> torch.optim.Optimizer:
         """Initialize a state optimizer.
-        
+
         Adding additional optimizers is possible by extending the optimizer_dict.
 
         Returns
@@ -120,26 +120,28 @@ class Trainer(BaseTrainer):
         torch.optim.Optimizer
             Initialized optimizer object.
         """
-        name = self.config['train']['optimizer']
+        name = self.config["train"]["optimizer"]
         optimizer_dict = {
-            'Adam': torch.optim.Adam,
-            'AdamW': torch.optim.AdamW,
-            'Adadelta': torch.optim.Adadelta,
-            'RMSprop': torch.optim.RMSprop,
+            "Adam": torch.optim.Adam,
+            "AdamW": torch.optim.AdamW,
+            "Adadelta": torch.optim.Adadelta,
+            "RMSprop": torch.optim.RMSprop,
         }
 
         # Fetch optimizer class
         cls = optimizer_dict[name]
         if cls is None:
-            raise ValueError(f"Optimizer '{name}' not recognized. "
-                             f"Available options are: {list(optimizer_dict.keys())}")
+            raise ValueError(
+                f"Optimizer '{name}' not recognized. "
+                f"Available options are: {list(optimizer_dict.keys())}"
+            )
 
         # Initialize
         try:
             self.optimizer = cls(
                 self.model.get_parameters(),
-                lr=self.config['train']['learning_rate'],
-                weight_decay=self.config['train'].get('weight_decay', 0.0)
+                lr=self.config["train"]["learning_rate"],
+                weight_decay=self.config["train"].get("weight_decay", 0.0),
             )
         except RuntimeError as e:
             raise RuntimeError(f"Error initializing optimizer: {e}") from e
@@ -147,29 +149,31 @@ class Trainer(BaseTrainer):
 
     def init_scheduler(self) -> torch.optim.lr_scheduler.LRScheduler:
         """Initialize a learning rate scheduler for the optimizer.
-        
+
         torch.optim.lr_scheduler.LRScheduler
             Initialized learning rate scheduler object.
         """
-        name = self.config['delta_model']['train']['lr_scheduler']
+        name = self.config["delta_model"]["train"]["lr_scheduler"]
         scheduler_dict = {
-            'StepLR': torch.optim.lr_scheduler.StepLR,
-            'ExponentialLR': torch.optim.lr_scheduler.ExponentialLR,
-            'ReduceLROnPlateau': torch.optim.lr_scheduler.ReduceLROnPlateau,
-            'CosineAnnealingLR': torch.optim.lr_scheduler.CosineAnnealingLR,
+            "StepLR": torch.optim.lr_scheduler.StepLR,
+            "ExponentialLR": torch.optim.lr_scheduler.ExponentialLR,
+            "ReduceLROnPlateau": torch.optim.lr_scheduler.ReduceLROnPlateau,
+            "CosineAnnealingLR": torch.optim.lr_scheduler.CosineAnnealingLR,
         }
 
         # Fetch scheduler class
         cls = scheduler_dict[name]
         if cls is None:
-            raise ValueError(f"Scheduler '{name}' not recognized. "
-                             f"Available options are: {list(scheduler_dict.keys())}")
+            raise ValueError(
+                f"Scheduler '{name}' not recognized. "
+                f"Available options are: {list(scheduler_dict.keys())}"
+            )
 
         # Initialize
         try:
             self.scheduler = cls(
                 self.optimizer,
-                **self.config['delta_model']['train']['lr_scheduler_params'],
+                **self.config["delta_model"]["train"]["lr_scheduler_params"],
             )
         except RuntimeError as e:
             raise RuntimeError(f"Error initializing scheduler: {e}") from e
@@ -180,28 +184,39 @@ class Trainer(BaseTrainer):
         Load model, optimizer, and scheduler states from a checkpoint to resume
         training if a checkpoint file exists.
         """
-        path = self.config['model_path']
+        path = self.config["model_path"]
         for file in os.listdir(path):
             # Check for state checkpoint: looks like `train_state_epoch_XX.pt`.
-            if ('train_state' in file): # and (str(self.start_epoch - 1) in file):
+            if (
+                "train_state" in file
+            ):  # and (str(self.start_epoch - 1) in file):
                 # log.info("Loading trainer states --> Resuming Training from" /
                 #          f" epoch {self.start_epoch}")
 
                 checkpoint = torch.load(os.path.join(path, file))
 
                 # Restore optimizer states
-                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                self.optimizer.load_state_dict(
+                    checkpoint["optimizer_state_dict"]
+                )
                 # # Restore model
-                self.model.load_model(epoch=checkpoint['epoch'])
-                self.start_epoch = checkpoint['epoch'] + 1
+                self.model.load_model(epoch=checkpoint["epoch"])
+                self.start_epoch = checkpoint["epoch"] + 1
 
                 if self.scheduler:
-                    self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                    self.scheduler.load_state_dict(
+                        checkpoint["scheduler_state_dict"]
+                    )
 
                 # Restore random states
-                torch.set_rng_state(checkpoint['random_state'])
-                if torch.cuda.is_available() and 'cuda_random_state' in checkpoint:
-                    torch.cuda.set_rng_state_all(checkpoint['cuda_random_state'])
+                torch.set_rng_state(checkpoint["random_state"])
+                if (
+                    torch.cuda.is_available()
+                    and "cuda_random_state" in checkpoint
+                ):
+                    torch.cuda.set_rng_state_all(
+                        checkpoint["cuda_random_state"]
+                    )
                 print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
                 return
             else:
@@ -213,18 +228,20 @@ class Trainer(BaseTrainer):
 
         # Setup a training grid (number of samples, minibatches, and timesteps)
         # 根据 data_sampler 类型选择合适的训练网格计算函数
-        if self.config.get('data_sampler') == 'DlSampler':
+        if self.config.get("data_sampler") == "DlSampler":
             n_samples, n_minibatch, n_timesteps = create_dl_training_grid(
-                self.train_dataset['xc_nn_norm'],
+                self.train_dataset["xc_nn_norm"],
                 self.config,
             )
         else:
             n_samples, n_minibatch, n_timesteps = create_training_grid(
-                self.train_dataset['xc_nn_norm'],
+                self.train_dataset["xc_nn_norm"],
                 self.config,
             )
 
-        log.info(f"Training model: Beginning {self.start_epoch} of {self.epochs} epochs")
+        log.info(
+            f"Training model: Beginning {self.start_epoch} of {self.epochs} epochs"
+        )
 
         # Training loop
         for epoch in range(self.start_epoch, self.epochs + 1):
@@ -235,9 +252,11 @@ class Trainer(BaseTrainer):
                 n_timesteps,
             )
 
-    def train_one_epoch(self, epoch, n_samples, n_minibatch, n_timesteps) -> None:
+    def train_one_epoch(
+        self, epoch, n_samples, n_minibatch, n_timesteps
+    ) -> None:
         """Train model for one epoch.
-        
+
         Parameters
         ----------
         epoch
@@ -256,7 +275,12 @@ class Trainer(BaseTrainer):
         self.total_loss = 0.0
 
         # Iterate through epoch in minibatches.
-        for mb in tqdm.tqdm(range(1, n_minibatch + 1), desc=prog_str, leave=False, dynamic_ncols=True):
+        for mb in tqdm.tqdm(
+            range(1, n_minibatch + 1),
+            desc=prog_str,
+            leave=False,
+            dynamic_ncols=True,
+        ):
             self.current_batch = mb
 
             dataset_sample = self.sampler.get_training_sample(
@@ -269,32 +293,32 @@ class Trainer(BaseTrainer):
             _ = self.model(dataset_sample)
             loss = self.model.calc_loss(dataset_sample)
             loss.backward()
-            
-            # phy_model = self.model.model_dict['HbvTriton'].phy_model
-            # if len(phy_model.grad_error_list) > 0:
-            #     print(f"检测到梯度爆炸的参数: {phy_model.grad_error_list}")
-            #     raise RuntimeError("Gradient NaN/Inf detected!")
-            # if self.config['train'].get('clip_grad_norm', False):
-            #     # Add gradient clipping here
-            torch.nn.utils.clip_grad_norm_(self.model.get_parameters(), max_norm=1.0)
-            
+
+            torch.nn.utils.clip_grad_norm_(
+                self.model.get_parameters(), max_norm=1.0
+            )
+
             self.optimizer.step()
             self.optimizer.zero_grad()
 
             self.total_loss += loss.item()
 
             if self.verbose:
-                tqdm.tqdm.write(f"Epoch {epoch}, batch {mb} | loss: {loss.item()}")
+                tqdm.tqdm.write(
+                    f"Epoch {epoch}, batch {mb} | loss: {loss.item()}"
+                )
 
         if self.use_scheduler:
             self.scheduler.step()
 
         if self.verbose:
             log.info(f"\n ---- \n Epoch {epoch} total loss: {self.total_loss}")
-        self._log_epoch_stats(epoch, self.model.loss_dict, n_minibatch, start_time)
+        self._log_epoch_stats(
+            epoch, self.model.loss_dict, n_minibatch, start_time
+        )
 
         # Save model and trainer states.
-        if epoch % self.config['train']['save_epoch'] == 0:
+        if epoch % self.config["train"]["save_epoch"] == 0:
             self.model.save_model(epoch)
             save_train_state(
                 self.config,
@@ -304,27 +328,31 @@ class Trainer(BaseTrainer):
                 clear_prior=True,
             )
 
-
     def evaluate(self) -> None:
         """Run model evaluation and return both metrics and model outputs."""
         self.is_in_train = False
 
         # Track overall predictions and observations
         batch_predictions = []
-        observations = self.eval_dataset['target']
+        observations = self.eval_dataset["target"]
 
         # Get start and end indices for each batch
-        n_samples = self.eval_dataset['xc_nn_norm'].shape[1]
-        batch_start = np.arange(0, n_samples, self.config['test']['batch_size'])
+        n_samples = self.eval_dataset["xc_nn_norm"].shape[1]
+        batch_start = np.arange(0, n_samples, self.config["test"]["batch_size"])
         batch_end = np.append(batch_start[1:], n_samples)
 
         # Model forward
         log.info(f"Validating Model: Forwarding {len(batch_start)} batches")
-        batch_predictions = self._forward_loop(self.eval_dataset, batch_start, batch_end)
+        batch_predictions = self._forward_loop(
+            self.eval_dataset, batch_start, batch_end
+        )
 
         # Save predictions and calculate metrics
         log.info("Saving model outputs + Calculating metrics")
-        save_outputs(self.config, batch_predictions, observations)
+        if self.config.get("save_output", False):
+            save_outputs(
+                self.config, batch_predictions, observations, create_dirs=True
+            )
         self.predictions = self._batch_data(batch_predictions)
 
         # Calculate metrics
@@ -338,13 +366,17 @@ class Trainer(BaseTrainer):
         batch_predictions = []
 
         # Get start and end indices for each batch
-        n_samples = self.dataset['xc_nn_norm'].shape[1]
-        batch_start = np.arange(0, n_samples, self.config['simulation']['batch_size'])
+        n_samples = self.dataset["xc_nn_norm"].shape[1]
+        batch_start = np.arange(
+            0, n_samples, self.config["simulation"]["batch_size"]
+        )
         batch_end = np.append(batch_start[1:], n_samples)
 
         # Model forward
         log.info(f"Inference: Forwarding {len(batch_start)} batches")
-        batch_predictions = self._forward_loop(self.dataset, batch_start, batch_end)
+        batch_predictions = self._forward_loop(
+            self.dataset, batch_start, batch_end
+        )
 
         # Save predictions
         log.info("Saving model outputs")
@@ -354,12 +386,12 @@ class Trainer(BaseTrainer):
         return self.predictions
 
     def _batch_data(
-            self,
-            batch_list: list[dict[str, torch.Tensor]],
-            target_key: str = None,
+        self,
+        batch_list: list[dict[str, torch.Tensor]],
+        target_key: str = None,
     ) -> None:
         """Merge batch data into a single dictionary.
-        
+
         Parameters
         ----------
         batch_list
@@ -371,24 +403,28 @@ class Trainer(BaseTrainer):
         data = {}
         try:
             if target_key:
-                return torch.cat([x[target_key] for x in batch_list], dim=1).numpy()
+                return torch.cat(
+                    [x[target_key] for x in batch_list], dim=1
+                ).numpy()
 
             for key in batch_list[0].keys():
                 if len(batch_list[0][key].shape) == 3:
                     pass
                 else:
                     pass
-                data[key] = torch.cat([d[key] for d in batch_list], dim=1).cpu().numpy()
+                data[key] = (
+                    torch.cat([d[key] for d in batch_list], dim=1).cpu().numpy()
+                )
             return data
 
         except ValueError as e:
             raise ValueError(f"Error concatenating batch data: {e}") from e
 
     def _forward_loop(
-            self,
-            data: dict[str, torch.Tensor],
-            batch_start: NDArray,
-            batch_end: NDArray,
+        self,
+        data: dict[str, torch.Tensor],
+        batch_start: NDArray,
+        batch_end: NDArray,
     ):
         """Forward loop used in model evaluation and inference.
 
@@ -404,8 +440,13 @@ class Trainer(BaseTrainer):
         # Track predictions accross batches
         batch_predictions = []
         # Save the batch predictions
-        model_name = self.config['delta_model']['phy_model']['model'][0]
-        for i in tqdm.tqdm(range(len(batch_start)), desc='Forwarding', leave=False, dynamic_ncols=True):
+        model_name = self.config["delta_model"]["phy_model"]["model"][0]
+        for i in tqdm.tqdm(
+            range(len(batch_start)),
+            desc="Forwarding",
+            leave=False,
+            dynamic_ncols=True,
+        ):
             self.current_batch = i
 
             # Select a batch of data
@@ -414,24 +455,33 @@ class Trainer(BaseTrainer):
                 batch_start[i],
                 batch_end[i],
             )
-            if self.config['test']['split_dataset']:
+            if self.config["test"]["split_dataset"]:
                 total_time_steps = dataset_sample["x_phy"].shape[0]
                 # split to 730
                 prediction_time_chunks = []
-                prediction_length = self.config['delta_model']['rho']
-                warmup_length = self.config['delta_model']['phy_model']['warm_up']
+                prediction_length = self.config["delta_model"]["rho"]
+                warmup_length = self.config["delta_model"]["phy_model"][
+                    "warm_up"
+                ]
                 # subtime_length = prediction_length + warmup_length
-                time_starts = range(0, total_time_steps - prediction_length - warmup_length + 1, prediction_length)
+                time_starts = range(
+                    0,
+                    total_time_steps - prediction_length - warmup_length + 1,
+                    prediction_length,
+                )
                 for t_start in time_starts:
                     t_end = t_start + prediction_length + warmup_length
                     time_window_input = {
-                        key: tensor[t_start:t_end, ...] if len(tensor.shape) > 2 else tensor
+                        key: tensor[t_start:t_end, ...]
+                        if len(tensor.shape) > 2
+                        else tensor
                         for key, tensor in dataset_sample.items()
                     }
                     prediction_window = self.model(time_window_input, eval=True)
                     prediction_valid_part = {
                         key: tensor[warmup_length:, ...].cpu().detach()
-                        if tensor.shape[0] > warmup_length else tensor.cpu().detach()
+                        if tensor.shape[0] > warmup_length
+                        else tensor.cpu().detach()
                         for key, tensor in prediction_window[model_name].items()
                     }
                     prediction_time_chunks.append(prediction_valid_part)
@@ -440,21 +490,23 @@ class Trainer(BaseTrainer):
                     for key, ten in chunk.items():
                         collated_chunks[key].append(ten)
                 prediction = {
-                    key: torch.cat(tensors, dim=0) for key, tensors in collated_chunks.items()
+                    key: torch.cat(tensors, dim=0)
+                    for key, tensors in collated_chunks.items()
                 }
                 batch_predictions.append(prediction)
             else:
                 prediction = self.model(dataset_sample, eval=True)
                 prediction = {
-                    key: tensor.cpu().detach() for key, tensor in prediction[model_name].items()
+                    key: tensor.cpu().detach()
+                    for key, tensor in prediction[model_name].items()
                 }
                 batch_predictions.append(prediction)
         return batch_predictions
 
     def calc_metrics(
-            self,
-            batch_predictions: list[dict[str, torch.Tensor]],
-            observations: torch.Tensor,
+        self,
+        batch_predictions: list[dict[str, torch.Tensor]],
+        observations: torch.Tensor,
     ) -> None:
         """Calculate and save model performance metrics.
 
@@ -465,13 +517,13 @@ class Trainer(BaseTrainer):
         observations
             Target variable observation data.
         """
-        target_name = self.config['train']['target'][0]
+        target_name = self.config["train"]["target"][0]
         predictions = self._batch_data(batch_predictions, target_name)
         target = np.expand_dims(observations[:, :, 0].cpu().numpy(), 2)
 
         # Remove warm-up data
-        target = target[self.config['delta_model']['phy_model']['warm_up']:, :]
-        target = target[:len(predictions),:]
+        target = target[self.config["delta_model"]["phy_model"]["warm_up"] :, :]
+        target = target[: len(predictions), :]
 
         # Compute metrics
         metrics = Metrics(
@@ -480,14 +532,14 @@ class Trainer(BaseTrainer):
         )
 
         # Save all metrics and aggregated statistics.
-        metrics.dump_metrics(self.config['out_path'])
+        metrics.dump_metrics(self.config["out_path"])
 
     def _log_epoch_stats(
-            self,
-            epoch: int,
-            loss_dict: dict[str, float],
-            n_minibatch: int,
-            start_time: float,
+        self,
+        epoch: int,
+        loss_dict: dict[str, float],
+        n_minibatch: int,
+        start_time: float,
     ) -> None:
         """Log statistics after each epoch.
 
@@ -502,10 +554,16 @@ class Trainer(BaseTrainer):
         start_time
             Start time of the epoch.
         """
-        avg_loss_dict = {key: value / n_minibatch + 1 for key, value in loss_dict.items()}
-        loss = ", ".join(f"{key}: {value:.6f}" for key, value in avg_loss_dict.items())
+        avg_loss_dict = {
+            key: value / n_minibatch + 1 for key, value in loss_dict.items()
+        }
+        loss = ", ".join(
+            f"{key}: {value:.6f}" for key, value in avg_loss_dict.items()
+        )
         elapsed = time.perf_counter() - start_time
-        mem_aloc = int(torch.cuda.memory_reserved(device=self.config['device']) * 0.000001)
+        mem_aloc = int(
+            torch.cuda.memory_reserved(device=self.config["device"]) * 0.000001
+        )
 
         log.info(
             f"Loss after epoch {epoch}: {loss} \n"

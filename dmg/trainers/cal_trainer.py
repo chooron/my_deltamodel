@@ -434,7 +434,6 @@ class CalTrainer(BaseTrainer):
         )
 
         # Save predictions and calculate metrics
-        # 现在的 observations 和 batch_predictions 长度都是 N*16，完全匹配，直接保存即可
         log.info("Saving model outputs + Calculating metrics")
         if self.config.get("save_output", False):
             save_outputsv2(
@@ -443,8 +442,6 @@ class CalTrainer(BaseTrainer):
         self.predictions = self._batch_data(batch_predictions)
 
         # Calculate metrics
-        # 这会算出 1600 个 KGE，保存到 metrics.csv 里。
-        # 你不用管它，后面写脚本自己挑就行。
         self.calc_metrics(batch_predictions, observations)
 
     def inference(self) -> None:

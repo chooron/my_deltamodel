@@ -16,7 +16,7 @@ from project.hydro_selection import load_config  # noqa: E402
 
 #------------------------------------------#
 # Define model settings here. 3555MiB
-CONFIG_PATH = r'conf/config_dblend_v2_1_ann.yaml'
+CONFIG_PATH = r'conf/config_dblend_v2_ann.yaml'
 #------------------------------------------#
 # model training
 config = load_config(CONFIG_PATH)

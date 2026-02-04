@@ -224,7 +224,11 @@ class ModelHandler(torch.nn.Module):
             self._forward_multimodel(dataset_dict, eval)
             return {list(self.model_dict.keys())[0]: self.ensemble_output_dict}
         else:
-            return self.output_dict
+            # 如果只有一个模型，直接返回该模型的输出（不嵌套）
+            if len(self.model_dict) == 1:
+                return list(self.output_dict.values())[0]
+            else:
+                return self.output_dict
 
     def _forward_multimodel(
         self,
@@ -289,8 +293,8 @@ class ModelHandler(torch.nn.Module):
 
         # Loss calculation for each model
         for name, output in self.output_dict.items():
-            if self.target_name not in output.keys():
-                raise ValueError(f"Target variable '{self.target_name}' not in model outputs.")
+            # if self.target_name not in output.keys():
+            #     raise ValueError(f"Target variable '{self.target_name}' not in model outputs.")
             output = output[self.target_name].squeeze()
             target = dataset_dict['target'].squeeze()
             if len(output.shape) < 2:

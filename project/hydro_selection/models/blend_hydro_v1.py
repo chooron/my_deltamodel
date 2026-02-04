@@ -1,20 +1,22 @@
 """
-Blend hydrological model that wraps multiple JIT-accelerated core models
-(HBV, SHM, EXP-HYDRO, HyMod) and averages their simulated runoff before
-routing.
+Blend hydrological model (V1 - Ultra Optimized)
+- 统一时间循环：所有模型在同一个for循环中执行
+- 仅支持静态参数：移除所有动态参数处理逻辑
+- torch.compile加速：每个step函数使用torch.compile编译
+- 高效状态管理：预分配所有状态张量
 
-This follows the same parameter handling pattern as `Hbv` but extends it to
-multiple conceptual models. Parameters for every sub-model are provided in a
-single concatenated tensor tuple, and each sub-model runs with its own JIT
-loop. Their pre-routing discharges are averaged and then passed through a
-unit-hydrograph routing module.
+核心改进：
+1. 单一for循环替代多模型并行流
+2. 去除动态参数相关的所有分支和计算
+3. 编译step函数以提升性能
+4. 保持forward接口完全兼容
 
-Author: GitHub Copilot (GPT-5.1-Codex-Max preview)
+Author: chooron
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -25,31 +27,12 @@ from project.hydro_selection.models.layers import hydro_core
 
 
 class BlendHydroV1(nn.Module):
-    """Blend of multiple JIT hydrological cores.
-
-    The model consumes a pair of tensors `parameters = (raw_phy_dy, raw_phy_static)`
-    produced by an upstream network, mirroring the interface of `Hbv`. The
-    parameters for all sub-models are concatenated in a fixed order, followed by
-    routing parameters. Dynamic parameters are supported per-model via the
-    `dynamic_params` config field.
-
-    Config keys (all optional):
-    - warm_up: int
-    - warm_up_states: bool
-    - variables: list[str] (default ["prcp", "tmean", "pet"])
-    - nearzero: float
-    - nmul: int (ensemble members per model)
-    - dynamic_params: dict[str, list[str]] keyed by model name
-    - selected_models: list[str] (e.g. ["HBV", "EXPHYDRO"])
-    - hymod_nq: int (number of Nash cascade reservoirs)
-    - routing: bool (kept for API parity; routing is always applied)
-    """
+    """优化版Blend水文模型：统一时间循环 + 纯静态参数 + torch.compile"""
 
     HBV_BOUNDS = hydro_core.HBV_PARAMS_BOUNDS
     SHM_BOUNDS = hydro_core.SHM_PARAMS_BOUNDS
     HYMOD_BOUNDS = hydro_core.HYMOD_PARAMS_BOUNDS
     EXPHYDRO_BOUNDS = hydro_core.EXPHYDRO_PARAMS_BOUNDS
-
     ROUTING_BOUNDS = {"rout_a": [0, 2.9], "rout_b": [0, 6.5]}
 
     def __init__(
@@ -59,16 +42,14 @@ class BlendHydroV1(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.name = "BlendHydro"
+        self.name = "BlendHydroV4"
         self.config = config or {}
-        self.initialize = False
         self.warm_up = 0
         self.pred_cutoff = 0
         self.warm_up_states = True
         self.variables = ["prcp", "tmean", "pet"]
         self.nearzero = 1e-5
         self.nmul = 1
-        self.dynamic_params: Dict[str, List[str]] = {}
         self.activate = F.sigmoid
 
         self.parameter_bounds_by_model = {
@@ -89,12 +70,10 @@ class BlendHydroV1(nn.Module):
             self._load_config(config)
 
         self._set_parameters()
-        self._setup_kernels()
+        self._setup_compiled_kernels()
 
-    # ------------------------------------------------------------------
-    # Config & parameter bookkeeping
-    # ------------------------------------------------------------------
     def _load_config(self, config: Dict[str, Any]) -> None:
+        """加载配置（去除动态参数相关）"""
         simple_attrs = [
             "warm_up",
             "warm_up_states",
@@ -106,196 +85,112 @@ class BlendHydroV1(nn.Module):
             if attr in config:
                 setattr(self, attr, config[attr])
 
-        if "dynamic_params" in config:
-            # Expecting dict keyed by model name, e.g. {"HBV": ["parK0", ...]}
-            self.dynamic_params = config.get("dynamic_params", {})
-        
         if "selected_models" in config:
             selected = [m.upper() for m in config["selected_models"]]
-            # Filter to only supported ones and maintain internal order if possible
             order = [m for m in self.all_supported_models if m in selected]
             if order:
                 self.model_order = order
-            print(self.model_order)
-        
-        # New: compilation setting (jit, torch.compile, none)
-        self.compile_type = config.get("compile_type", "jit")
 
     def _set_parameters(self) -> None:
+        """设置参数名称（仅静态参数）"""
         self.routing_param_names = list(self.routing_parameter_bounds.keys())
 
-        # Distribute nmul budget across models
-        n_models = len(self.model_order)
-        # We treat the configured nmul as the total target budget
-        self.nmul = max(1, self.nmul // n_models)
-
-        # Build per-model param name lists
+        # 每个模型的参数名
         self.phy_param_names_by_model: Dict[str, List[str]] = {}
-        dy_total = 0
-        static_total = 0
+        total_params = 0
         for name in self.model_order:
             bounds = self.parameter_bounds_by_model[name]
-            self.phy_param_names_by_model[name] = list(bounds.keys())
-            dy_count = len(self.dynamic_params.get(name, []))
-            static_count = len(bounds) - dy_count
-            dy_total += dy_count
-            static_total += static_count
+            param_names = list(bounds.keys())
+            self.phy_param_names_by_model[name] = param_names
+            total_params += len(param_names)
 
-        self.learnable_param_count1 = dy_total * self.nmul
-        self.learnable_param_count2 = static_total * self.nmul + len(
+        # 总参数数量：模型参数 * nmul + 路由参数
+        self.learnable_param_count = total_params * self.nmul + len(
             self.routing_param_names
         )
-        self.learnable_param_count = (
-            self.learnable_param_count1 + self.learnable_param_count2
+
+    def _setup_compiled_kernels(self) -> None:
+        """编译每个模型的step函数"""
+        self.compiled_steps = {}
+
+        # 使用torch.compile编译每个step函数
+        self.compiled_steps["HBV"] = torch.compile(hydro_core.hbv_step)
+        self.compiled_steps["SHM"] = torch.compile(hydro_core.shm_step)
+        self.compiled_steps["EXPHYDRO"] = torch.compile(
+            hydro_core.exphydro_step
         )
+        self.compiled_steps["HYMOD"] = torch.compile(hydro_core.hymod_step)
 
-    def _setup_kernels(self) -> None:
-        """Setup model kernels based on compile_type."""
-        # Map model names to their corresponding functions in hydro_core
-        kernel_map = {
-            "HBV": hydro_core.hbv_timestep_loop,
-            "SHM": hydro_core.shm_timestep_loop,
-            "EXPHYDRO": hydro_core.exphydro_timestep_loop,
-            "HYMOD": hydro_core.hymod_timestep_loop,
-        }
-
-        # Apply compilation or keep as is
-        self.kernels: Dict[str, Any] = {}
-        for model_name in self.model_order:
-            kernel_fn = kernel_map[model_name]
-            if self.compile_type == "torch.compile":
-                self.kernels[model_name] = torch.compile(kernel_fn)
-            elif self.compile_type == "jit":
-                # If functions in hydro_core are already decorated with @torch.jit.script,
-                # they are already JITed. If not, we script them here.
-                # Assuming hydro_core functions are NOT pre-decorated for maximum flexibility:
-                self.kernels[model_name] = torch.jit.script(kernel_fn)
-            else:
-                # "none" mode: use raw functions
-                self.kernels[model_name] = kernel_fn
-
-        # Setup CUDA streams for parallel execution (strictly CUDA)
-        self.streams = {
-            m: torch.cuda.Stream(device=self.device) for m in self.model_order
-        }
-
-    # ------------------------------------------------------------------
-    # Tensor helpers
-    # ------------------------------------------------------------------
     def _descale_params(
-        self, params: torch.Tensor, names: List[str], bounds: Dict[str, List[float]]
+        self,
+        params: torch.Tensor,
+        names: List[str],
+        bounds: Dict[str, List[float]],
     ) -> Dict[str, torch.Tensor]:
+        """反归一化参数"""
         return {
             name: change_param_range(params[:, i, :], bounds[name])
             for i, name in enumerate(names)
         }
 
-    def _descale_dynamic_params(
-        self, params: torch.Tensor, names: List[str], bounds: Dict[str, List[float]]
+    def _descale_routing_params(
+        self, params: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
-        n_steps, n_grid = params.shape[:2]
-        pmat = torch.ones([1, n_grid, 1], device=self.device)
-        result = {}
-        for i, name in enumerate(names):
-            static_par = (
-                params[-1, :, i, :].unsqueeze(0).expand(n_steps, -1, -1)
-            )
-            dynamic_par = params[:, :, i, :]
-            mask = torch.bernoulli(pmat).detach_()
-            combined = dynamic_par * (1 - mask) + static_par * mask
-            result[name] = change_param_range(combined, bounds[name])
-        return result
-
-    def _descale_routing_params(self, params: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """反归一化路由参数"""
         return {
             name: change_param_range(
                 params[:, i], self.routing_parameter_bounds[name]
             )
-            for i, name in enumerate(self.routing_parameter_bounds.keys())
+            for i, name in enumerate(self.routing_param_names)
         }
 
     def unpack_parameters(
-        self, parameters: Tuple[Union[None, torch.Tensor], torch.Tensor]
-    ) -> Tuple[Dict[str, Union[None, torch.Tensor]], Dict[str, torch.Tensor], torch.Tensor]:
-        """Split concatenated parameter tensors into per-model blocks."""
-        dy_count_total = sum(len(self.dynamic_params.get(m, [])) for m in self.model_order)
-        static_counts = [
-            len(self.parameter_bounds_by_model[m])
-            - len(self.dynamic_params.get(m, []))
-            for m in self.model_order
-        ]
+        self, parameters: Dict[str, torch.Tensor]
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+        """
+        解包参数（从MultiHeadNet字典输出提取）
 
-        raw_phy_dy, raw_phy_static = parameters
-        raw_phy_dy = self.activate(raw_phy_dy)
-        raw_phy_static = self.activate(raw_phy_static)
+        Args:
+            parameters: 字典，包含各模型参数和GAMMA_UH路由参数
+                例如: {"HBV": [B, 14*nmul], "SHM": [B, 7*nmul], 
+                      "GAMMA_UH": [B, 2], ...}
 
-        phy_dy_dict: Dict[str, Optional[torch.Tensor]] = {m: None for m in self.model_order}
-        if raw_phy_dy is not None:
-            phy_dy = raw_phy_dy.view(
-                raw_phy_dy.shape[0], raw_phy_dy.shape[1], dy_count_total, self.nmul
-            )
-            offset = 0
-            for m in self.model_order:
-                dy_count = len(self.dynamic_params.get(m, []))
-                if dy_count > 0:
-                    phy_dy_dict[m] = phy_dy[:, :, offset : offset + dy_count, :]
-                offset += dy_count
-
-        # static + routing
-        total_static = sum(static_counts)
-        static_block = raw_phy_static[:, : total_static * self.nmul]
-        routing_block = raw_phy_static[:, total_static * self.nmul :]
-
-        phy_static = static_block.view(
-            static_block.shape[0], total_static, self.nmul
-        )
-
+        Returns:
+            - phy_static_dict: 各模型的静态参数字典 (已reshape)
+            - routing_block: 路由参数张量
+        """
+        # 提取路由参数
+        routing_block = self.activate(parameters["GAMMA_UH"])
+        
+        # 提取并处理各模型参数
         phy_static_dict: Dict[str, torch.Tensor] = {}
-        offset = 0
-        for m, sc in zip(self.model_order, static_counts):
-            phy_static_dict[m] = phy_static[:, offset : offset + sc, :]
-            offset += sc
+        for model_name in self.model_order:
+            if model_name in parameters:
+                # 应用sigmoid激活
+                raw_params = self.activate(parameters[model_name])
+                # Reshape为 [batch, n_params, nmul]
+                n_params = len(self.phy_param_names_by_model[model_name])
+                phy_static_dict[model_name] = raw_params.view(
+                    raw_params.shape[0], n_params, self.nmul
+                )
 
-        return phy_dy_dict, phy_static_dict, routing_block
+        return phy_static_dict, routing_block
 
-    # Prepare parameters per model (descale dynamic/static when available)
     def get_model_params(
-        self,
-        m: str,
-        phy_dy_dict: Dict[str, Optional[torch.Tensor]],
-        phy_static_dict: Dict[str, torch.Tensor],
+        self, model_name: str, phy_static_dict: Dict[str, torch.Tensor]
     ) -> Dict[str, torch.Tensor]:
-        """Return a merged parameter dict (dynamic overrides static)."""
-        bounds = self.parameter_bounds_by_model[m]
-        dy_names = self.dynamic_params.get(m, [])
-        static_names = [p for p in bounds.keys() if p not in dy_names]
+        """获取单个模型的参数字典（仅静态参数）"""
+        bounds = self.parameter_bounds_by_model[model_name]
+        param_names = self.phy_param_names_by_model[model_name]
 
-        dy_params: Dict[str, torch.Tensor] = {}
-        if phy_dy_dict[m] is not None and len(dy_names) > 0:
-            dy_p = phy_dy_dict[m]
-            if dy_p is not None:
-                dy_params = self._descale_dynamic_params(dy_p, dy_names, bounds)
-
-        static_params = self._descale_params(
-            phy_static_dict[m], static_names, bounds
+        return self._descale_params(
+            phy_static_dict[model_name], param_names, bounds
         )
 
-        # merged: dynamic (if present) else static
-        merged: Dict[str, torch.Tensor] = {}
-        for name in bounds.keys():
-            if name in dy_params:
-                merged[name] = dy_params[name]
-            else:
-                merged[name] = static_params[name]
-        return merged
-
-
-    # ------------------------------------------------------------------
-    # Routing
-    # ------------------------------------------------------------------
     def _apply_routing(
         self, Qsim: torch.Tensor, n_steps: int, n_grid: int
     ) -> torch.Tensor:
+        """应用单位线路由"""
         UH = uh_gamma(
             self.routing_param_dict["rout_a"].repeat(n_steps, 1).unsqueeze(-1),
             self.routing_param_dict["rout_b"].repeat(n_steps, 1).unsqueeze(-1),
@@ -306,25 +201,253 @@ class BlendHydroV1(nn.Module):
         Qsrout = uh_conv(rf, UH).permute([2, 0, 1])
         return Qsrout
 
-    # ------------------------------------------------------------------
-    # Forward
-    # ------------------------------------------------------------------
+    def _initialize_states(
+        self, n_steps: int, n_grid: int
+    ) -> Dict[str, Dict[str, torch.Tensor]]:
+        """初始化所有模型的状态变量"""
+        states = {}
+
+        # HBV: 5个状态
+        if "HBV" in self.model_order:
+            states["HBV"] = {
+                "S1": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+                "S2": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+                "S3": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+                "S4": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+                "S5": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+            }
+
+        # SHM: 4个状态（无雪层存储）
+        if "SHM" in self.model_order:
+            states["SHM"] = {
+                "sf": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+                "su": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+                "si": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+                "sb": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+            }
+
+        # EXPHYDRO: 2个状态
+        if "EXPHYDRO" in self.model_order:
+            states["EXPHYDRO"] = {
+                "soil_storage": torch.zeros(
+                    n_grid, self.nmul, device=self.device
+                )
+                + self.nearzero,
+                "snow_storage": torch.zeros(
+                    n_grid, self.nmul, device=self.device
+                )
+                + self.nearzero,
+            }
+
+        # HYMOD: 5个状态
+        if "HYMOD" in self.model_order:
+            states["HYMOD"] = {
+                "S1": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+                "S2": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+                "S3": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+                "S4": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+                "S5": torch.zeros(n_grid, self.nmul, device=self.device)
+                + self.nearzero,
+            }
+
+        return states
+
+    def _unified_timestep_loop(
+        self,
+        P: torch.Tensor,
+        T: torch.Tensor,
+        PET: torch.Tensor,
+        params_dict: Dict[str, Dict[str, torch.Tensor]],
+        n_steps: int,
+        n_grid: int,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        统一的时间循环：在单个循环内执行所有模型
+
+        Args:
+            P: [n_steps, n_grid, nmul]
+            T: [n_steps, n_grid, nmul]
+            PET: [n_steps, n_grid, nmul]
+            params_dict: 各模型的参数字典
+            n_steps: 时间步数
+            n_grid: 网格数
+
+        Returns:
+            各模型的输出时间序列
+        """
+        # 初始化状态
+        states = self._initialize_states(n_steps, n_grid)
+
+        # 预分配输出张量
+        outputs = {}
+        for model_name in self.model_order:
+            outputs[model_name] = torch.zeros(
+                n_steps, n_grid, self.nmul, device=self.device
+            )
+
+        # ===== 核心：统一时间循环 =====
+        for t in range(n_steps):
+            P_t = P[t]
+            T_t = T[t]
+            PET_t = PET[t]
+
+            # HBV模型
+            if "HBV" in self.model_order:
+                params = params_dict["HBV"]
+                hbv_step_fn = self.compiled_steps["HBV"]
+
+                Q, Ea, S1, S2, S3, S4, S5 = hbv_step_fn(
+                    P_t,
+                    T_t,
+                    PET_t,
+                    params["tt"],
+                    params["tti"],
+                    params["ttm"],
+                    params["cfr"],
+                    params["cfmax"],
+                    params["whc"],
+                    params["cflux"],
+                    params["fc"],
+                    params["lp"],
+                    params["beta"],
+                    params["k0"],
+                    params["alpha"],
+                    params["perc"],
+                    params["k1"],
+                    states["HBV"]["S1"],
+                    states["HBV"]["S2"],
+                    states["HBV"]["S3"],
+                    states["HBV"]["S4"],
+                    states["HBV"]["S5"],
+                    self.nearzero,
+                )
+
+                outputs["HBV"][t] = Q
+                states["HBV"].update(
+                    {"S1": S1, "S2": S2, "S3": S3, "S4": S4, "S5": S5}
+                )
+
+            # SHM模型
+            if "SHM" in self.model_order:
+                params = params_dict["SHM"]
+                shm_step_fn = self.compiled_steps["SHM"]
+
+                Q, ret, su, sf, si, sb = shm_step_fn(
+                    P_t,
+                    T_t,
+                    PET_t,
+                    params["f_thr"],
+                    params["sumax"],
+                    params["beta"],
+                    params["perc"],
+                    params["kf"],
+                    params["ki"],
+                    params["kb"],
+                    self.nearzero,
+                    states["SHM"]["su"],
+                    states["SHM"]["sf"],
+                    states["SHM"]["si"],
+                    states["SHM"]["sb"],
+                )
+
+                outputs["SHM"][t] = Q
+                states["SHM"].update({"sf": sf, "su": su, "si": si, "sb": sb})
+
+            # EXPHYDRO模型
+            if "EXPHYDRO" in self.model_order:
+                params = params_dict["EXPHYDRO"]
+                exphydro_step_fn = self.compiled_steps["EXPHYDRO"]
+
+                q, et, soil_storage, snow_storage, melt = exphydro_step_fn(
+                    P_t,
+                    T_t,
+                    PET_t,
+                    params["f"],
+                    params["ddf"],
+                    params["smax"],
+                    params["qmax"],
+                    params["mint"],
+                    params["maxt"],
+                    self.nearzero,
+                    states["EXPHYDRO"]["soil_storage"],
+                    states["EXPHYDRO"]["snow_storage"],
+                )
+
+                outputs["EXPHYDRO"][t] = q
+                states["EXPHYDRO"].update(
+                    {"soil_storage": soil_storage, "snow_storage": snow_storage}
+                )
+
+            # HYMOD模型
+            if "HYMOD" in self.model_order:
+                params = params_dict["HYMOD"]
+                hymod_step_fn = self.compiled_steps["HYMOD"]
+
+                Q, Ea, S1, S2, S3, S4, S5 = hymod_step_fn(
+                    P_t,
+                    T_t,
+                    PET_t,
+                    params["smax"],
+                    params["b_exp"],
+                    params["a_split"],
+                    params["kf"],
+                    params["ks"],
+                    states["HYMOD"]["S1"],
+                    states["HYMOD"]["S2"],
+                    states["HYMOD"]["S3"],
+                    states["HYMOD"]["S4"],
+                    states["HYMOD"]["S5"],
+                    self.nearzero,
+                )
+
+                outputs["HYMOD"][t] = Q
+                states["HYMOD"].update(
+                    {"S1": S1, "S2": S2, "S3": S3, "S4": S4, "S5": S5}
+                )
+
+        return outputs
+
     def forward(
         self,
         x_dict: Dict[str, torch.Tensor],
-        parameters: Tuple[Union[None, torch.Tensor], torch.Tensor],
+        parameters: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
+        """
+        前向传播
+
+        Args:
+            x_dict: 包含'x_phy'的字典 [n_steps, n_grid, n_vars]
+            parameters: MultiHeadNet输出的字典
+                       {"HBV": tensor, "SHM": tensor, "GAMMA_UH": tensor, ...}
+
+        Returns:
+            包含'streamflow'等输出的字典
+        """
         x = x_dict["x_phy"]
 
         if not self.warm_up_states:
             self.pred_cutoff = self.warm_up
 
-        phy_dy_dict, phy_static_dict, phy_route = self.unpack_parameters(parameters)
+        # 解包参数（从字典提取）
+        phy_static_dict, phy_route = self.unpack_parameters(parameters)
         self.routing_param_dict = self._descale_routing_params(phy_route)
 
         n_steps, n_grid = x.shape[:2]
 
-        # Prepare forcing
+        # 准备驱动数据
         P = (
             x[:, :, self.variables.index("prcp")]
             .unsqueeze(2)
@@ -337,51 +460,41 @@ class BlendHydroV1(nn.Module):
         )
         PET = (
             x[:, :, self.variables.index("pet")]
-            .unsqueeze(-1)
+            .unsqueeze(2)
             .repeat(1, 1, self.nmul)
         )
 
-        per_model_qsim: Dict[str, torch.Tensor] = {}
-
-        # 2. 并行执行 (Explicit CUDA Streams)
+        # 获取各模型参数
+        params_dict = {}
         for model_name in self.model_order:
-            current_params = self.get_model_params(
-                model_name, phy_dy_dict, phy_static_dict
+            params_dict[model_name] = self.get_model_params(
+                model_name, phy_static_dict
             )
-            stream = self.streams[model_name]
 
-            with torch.cuda.stream(stream):
-                # 获取该模型对应的 Kernel
-                kernel = self.kernels[model_name]
-                q = kernel(
-                    P, T, PET, **current_params, nearzero=self.nearzero
-                )[0]
-                per_model_qsim[model_name] = q
-
-        # 等待所有流完成
-        torch.cuda.synchronize(device=self.device)
-
-        # ==========================================
-        # 并行计算结束，per_model_qsim 已填充完毕
-        # ==========================================
-
-        # Blend: Concatenate experts from all models and average the whole pool
-        all_q = torch.cat(
-            [per_model_qsim[m] for m in self.model_order], dim=-1
+        # 统一时间循环执行所有模型
+        model_outputs = self._unified_timestep_loop(
+            P, T, PET, params_dict, n_steps, n_grid
         )
+
+        # 集成所有模型输出（平均）
+        all_q = torch.cat([model_outputs[m] for m in self.model_order], dim=-1)
         blend_q = all_q.mean(-1)
 
+        # 应用路由
         Qrouted = self._apply_routing(blend_q, n_steps, n_grid)
 
+        # 构造返回字典
         result: Dict[str, torch.Tensor] = {
             "streamflow": Qrouted,
             "blend_prerouting": blend_q,
+            "target": x_dict["target"]
         }
 
-        # attach per-model summary results for inspection
-        for name, q in per_model_qsim.items():
-            result[f"{name.lower()}_prerouting"] = q.mean(-1)
+        # 添加各模型的单独输出
+        for name, output in model_outputs.items():
+            result[f"{name.lower()}_prerouting"] = output.mean(-1)
 
+        # 截断warmup
         if not self.warm_up_states:
             for key in result:
                 if result[key] is not None:
