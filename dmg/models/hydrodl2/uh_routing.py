@@ -13,11 +13,18 @@ def uh_gamma(a, b, lenF=10):
     theta = F.relu(b[0:lenF, :, :]).view([lenF, m[1], m[2]]) + 0.5  # minimum 0.5
     t = torch.arange(0.5, lenF * 1.0).view([lenF, 1, 1]).repeat([1, m[1], m[2]])
     t = t.to(aa.device)
-    denom = (aa.lgamma().exp()) * (theta**aa)
-    mid = t ** (aa - 1)
-    right = torch.exp(-t / theta)
-    w = 1 / denom * mid * right
-    w = w / w.sum(0)  # scale to 1 for each UH
+
+    # 数值稳定性改进：使用log空间计算避免溢出
+    log_denom = aa.lgamma() + aa * torch.log(theta)
+    log_mid = (aa - 1) * torch.log(t)
+    log_right = -t / theta
+    log_w = log_mid + log_right - log_denom
+    w = torch.exp(log_w)
+
+    # 防止除零
+    w_sum = w.sum(0)
+    w_sum = torch.where(w_sum > 1e-10, w_sum, torch.ones_like(w_sum))
+    w = w / w_sum  # scale to 1 for each UH
 
     return w
 

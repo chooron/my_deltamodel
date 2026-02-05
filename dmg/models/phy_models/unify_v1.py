@@ -5,19 +5,20 @@ Designed for differentiable hydrological modeling where parameters are predicted
 by a neural network (e.g., LSTM, Transformer).
 
 Key Features:
-- Input: Parameters from NN output with shape (batch, n_params * nmul)
+- Input: Parameters from NN output with shape (batch, n_params * nmul + n_routing_params)
 - Computation: Reshaped to (batch, n_params, nmul) for model execution
 - Output: (time, batch) after ensemble averaging over nmul dimension
+- Optional unit hydrograph routing using gamma distribution
 
 Difference from V2:
-- V1: NN-predicted params -> compute (batch, nmul) -> mean over nmul -> output (time, batch)
+- V1: NN-predicted params -> compute (batch, nmul) -> mean over nmul -> optional routing -> output (time, batch)
 - V2: Multi-start optimizer params -> compute (batch, nmul) -> flatten -> output (time, batch*nmul)
 """
 
 from typing import Any, Optional, Union, Dict, List, Tuple
 import torch
 import torch.nn as nn
-from dmg.models.hydrodl2 import change_param_range
+from dmg.models.hydrodl2 import change_param_range, uh_gamma, uh_conv
 from dmg.models.phy_models.core import PARAM_INFO, STFN_INFO, INIT_INFO, STATE_INFO
 
 
@@ -26,7 +27,8 @@ class UnifyV1(nn.Module):
     Unified Hydrological Model V1 (Neural Network Parameter Prediction)
 
     Parameters are predicted by neural network, computed with shape (batch, nmul),
-    then averaged over nmul dimension for final output (time, batch).
+    then averaged over nmul dimension. Optionally applies unit hydrograph routing
+    for final output (time, batch).
     """
 
     def __init__(
@@ -56,6 +58,13 @@ class UnifyV1(nn.Module):
         self.variables = ["prcp", "tmean", "pet"]
         self.nearzero = 1e-5
         self.nmul = 1
+        self.routing = False
+
+        # Routing parameter bounds
+        self.routing_parameter_bounds = {
+            'rout_a': [0, 2.9],
+            'rout_b': [0, 6.5],
+        }
 
         self.backend = self.config.get("backend", backend)
         self.device = device or torch.device(
@@ -73,14 +82,18 @@ class UnifyV1(nn.Module):
         self._set_parameters()
 
     def _load_config(self, config: Dict) -> None:
-        for attr in ["warm_up", "warm_up_states", "variables", "nearzero", "nmul"]:
+        for attr in ["warm_up", "warm_up_states", "variables", "nearzero", "nmul", "routing"]:
             if attr in config:
                 setattr(self, attr, config[attr])
         self.check_water_balance = config.get("check_water_balance", False)
 
     def _set_parameters(self) -> None:
         self.phy_param_names = list(self.parameter_bounds.keys())
-        self.learnable_param_count = len(self.phy_param_names) * self.nmul
+        if self.routing:
+            self.routing_param_names = list(self.routing_parameter_bounds.keys())
+        else:
+            self.routing_param_names = []
+        self.learnable_param_count = len(self.phy_param_names) * self.nmul + len(self.routing_param_names)
 
     def _init_states(self, n_grid: int) -> Tuple[torch.Tensor, ...]:
         return self.init_fn(n_grid, self.nmul, self.device, self.nearzero)
@@ -93,15 +106,31 @@ class UnifyV1(nn.Module):
             for i, name in enumerate(names)
         }
 
+    def _descale_routing_params(
+        self, routing_params: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
+        """Descale routing parameters from [0,1] to their physical ranges"""
+        routing_params = torch.sigmoid(routing_params)
+        return {
+            name: change_param_range(routing_params[:, i], self.routing_parameter_bounds[name])
+            for i, name in enumerate(self.routing_param_names)
+        }
+
     def unpack_parameters(
         self, parameters: Tuple[Optional[torch.Tensor], torch.Tensor]
-    ) -> torch.Tensor:
-        """Unpack NN output: (batch, n_params*nmul) -> (batch, n_params, nmul)"""
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Unpack NN output: (batch, n_params*nmul + n_routing_params) -> (batch, n_params, nmul), (batch, n_routing_params)"""
         _, raw_phy_static = parameters
         param_count = len(self.phy_param_names)
-        return raw_phy_static[:, : param_count * self.nmul].view(
+        phy_params = raw_phy_static[:, : param_count * self.nmul].view(
             raw_phy_static.shape[0], param_count, self.nmul
         )
+
+        routing_params = None
+        if self.routing:
+            routing_params = raw_phy_static[:, param_count * self.nmul:]
+
+        return phy_params, routing_params
 
     def forward(
         self,
@@ -109,19 +138,25 @@ class UnifyV1(nn.Module):
         parameters: Tuple[Optional[torch.Tensor], torch.Tensor],
     ) -> Union[Tuple[torch.Tensor, ...], Dict[str, torch.Tensor]]:
         x_phy = x_dict["x_phy"]
-        phy_static = self.unpack_parameters(parameters)
+        phy_static, routing_params = self.unpack_parameters(parameters)
         n_grid = x_phy.size(1)
         states = self._init_states(n_grid)
         phy_static_dict = self._descale_params(
             phy_static, self.phy_param_names, self.parameter_bounds
         )
-        return self._run_model(x_dict, states, phy_static_dict)
+
+        routing_param_dict = None
+        if self.routing and routing_params is not None:
+            routing_param_dict = self._descale_routing_params(routing_params)
+
+        return self._run_model(x_dict, states, phy_static_dict, routing_param_dict)
 
     def _run_model(
         self,
         x_dict: dict,
         states: Tuple[torch.Tensor, ...],
         static_params: Dict[str, torch.Tensor],
+        routing_param_dict: Optional[Dict[str, torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
         forcing = x_dict["x_phy"]
         n_steps, n_grid = forcing.shape[:2]
@@ -148,15 +183,44 @@ class UnifyV1(nn.Module):
             Qsim_out[t] = outputs[0]
             curr_states = outputs[2:]
 
-        return self._finalize_output(Qsim_out)
+        return self._finalize_output(Qsim_out, routing_param_dict)
 
-    def _finalize_output(self, Qsim_out: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def _finalize_output(
+        self,
+        Qsim_out: torch.Tensor,
+        routing_param_dict: Optional[Dict[str, torch.Tensor]] = None,
+    ) -> Dict[str, torch.Tensor]:
         """
-        Finalize with ensemble averaging.
+        Finalize with ensemble averaging and optional unit hydrograph routing.
         Input: (time, batch, nmul) -> Output: (time, batch)
         """
+        # First, average over nmul dimension
         Qsimavg = Qsim_out.mean(-1)
-        result = {"streamflow": Qsimavg}
+
+        # Apply unit hydrograph routing if enabled
+        if self.routing and routing_param_dict is not None:
+            n_steps, n_grid = Qsimavg.shape
+
+            # Generate unit hydrograph using gamma distribution
+            UH = uh_gamma(
+                routing_param_dict['rout_a'].repeat(n_steps, 1).unsqueeze(-1),
+                routing_param_dict['rout_b'].repeat(n_steps, 1).unsqueeze(-1),
+                lenF=15,
+            )
+
+            # Prepare data for convolution: [time, batch] -> [batch, vars, time]
+            rf = torch.unsqueeze(Qsimavg, -1).permute([1, 2, 0])
+            UH = UH.permute([1, 2, 0])
+
+            # Apply unit hydrograph convolution
+            Qsrout = uh_conv(rf, UH).permute([2, 0, 1])  # [time, batch, vars]
+
+            # Remove the extra dimension: [time, batch, 1] -> [time, batch]
+            streamflow = Qsrout.squeeze(-1)
+        else:
+            streamflow = Qsimavg
+
+        result = {"streamflow": streamflow}
 
         if not self.warm_up_states:
             for key in result:

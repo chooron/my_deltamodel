@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 #     log.warning('Ray Tune is not installed or is misconfigured. Tuning will be disabled.')
 
 
-class Trainer(BaseTrainer):
+class DplTrainer(BaseTrainer):
     """Generic, unified trainer for neural networks and differentiable models.
 
     Inspired by the Hugging Face Trainer class.
@@ -228,16 +228,10 @@ class Trainer(BaseTrainer):
 
         # Setup a training grid (number of samples, minibatches, and timesteps)
         # 根据 data_sampler 类型选择合适的训练网格计算函数
-        if self.config.get("data_sampler") == "DlSampler":
-            n_samples, n_minibatch, n_timesteps = create_dl_training_grid(
-                self.train_dataset["xc_nn_norm"],
-                self.config,
-            )
-        else:
-            n_samples, n_minibatch, n_timesteps = create_training_grid(
-                self.train_dataset["xc_nn_norm"],
-                self.config,
-            )
+        n_samples, n_minibatch, n_timesteps = create_training_grid(
+            self.train_dataset["xc_nn_norm"],
+            self.config,
+        )
 
         log.info(
             f"Training model: Beginning {self.start_epoch} of {self.epochs} epochs"
@@ -482,7 +476,7 @@ class Trainer(BaseTrainer):
                         key: tensor[warmup_length:, ...].cpu().detach()
                         if tensor.shape[0] > warmup_length
                         else tensor.cpu().detach()
-                        for key, tensor in prediction_window.items()
+                        for key, tensor in prediction_window[model_name].items()
                     }
                     prediction_time_chunks.append(prediction_valid_part)
                 collated_chunks = {key: [] for key in prediction_time_chunks[0]}

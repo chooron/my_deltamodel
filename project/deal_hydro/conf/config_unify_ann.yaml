@@ -100,4 +100,4 @@ train:
   target:
   - streamflow
 trained_model: project/deal_hydro/output/model/
-trainer: CalTrainer
+trainer: Trainer

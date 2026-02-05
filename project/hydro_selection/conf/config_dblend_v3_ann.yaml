@@ -11,10 +11,10 @@ gpu_id: 0
 
 data_loader: HydroLoader
 data_sampler: HydroSampler
-trainer: Trainer
-save_output: true
-save_path: project/flex_mopex/output
-trained_model: project/flex_mopex/output/model/
+trainer: ReloadTrainer
+
+save_path: project/hydro_selection/output
+trained_model: project/hydro_selection/output/model/
 
 ## Training ------------------------------#
 train:
@@ -28,6 +28,7 @@ train:
   save_epoch: 5
   learning_rate: 1.0
   lr_scheduler: None
+  auxiliary_loss_weight: 0.1
   lr_scheduler_params:
     step_size: 10
     gamma: 0.5
@@ -50,24 +51,35 @@ simulation:
 loss_function:
   model: NseBatchLoss
 
+save_output: true
+
+pretrained_model:
+  enabled: true
+  path: /workspace/my_deltamodel/project/hydro_selection/output/camels_671/train1980-1995/no_multi/MultiHeadNet_E50_R365_B100_n4_noLn_noWU_42/BlendHydroV0/NseBatchLoss/stat
+  phy_model: BlendHydroV0
+  nn_model: MultiHeadNet
+  epoch: 50  # 加载第50个epoch的权重，设为0则自动查找最新的
+
 ## Differentiable Model -----------------------------#
 delta_model:
   rho: 365
 
   phy_model:
-    directory: project\flex_mopex\models
-    model: [FlexMopexV1]
-    nmul: 16
+    directory: project\hydro_selection\models
+    model: [BlendHydroV3]
+    nmul: 4
     warm_up: 365
     warm_up_states: False
     dy_drop: 0.0
-    attributes: []
+    num_attributes: 35
     use_log_norm: []
     nearzero: 1e-5
+    compile_type: jit
+    selected_models: [HBV, SHM, EXPHYDRO, HYMOD]
     forcings: [prcp, tmean, pet]
 
   nn_model:
-    directory: project\flex_mopex\models
+    directory: project\hydro_selection\models
     model: MultiHeadNet
     dr: 0.5
     hidden_size: 128
