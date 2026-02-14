@@ -229,7 +229,9 @@ class FlexMopexV1(nn.Module):
         for name in self.weight_names:
             # weights[name] 形状: [n_grid]
             # 扩展到 [n_grid, nmul]
-            weights_expanded[name] = weights[name].unsqueeze(-1).repeat(1, self.nmul)
+            weights_expanded[name] = (
+                weights[name].unsqueeze(-1).repeat(1, self.nmul)
+            )
 
         # 预分配输出张量
         Q_out = torch.zeros(n_steps, n_grid, self.nmul, device=self.device)
@@ -354,26 +356,21 @@ class FlexMopexV1(nn.Module):
         # 构造返回字典
         result: Dict[str, torch.Tensor] = {
             "streamflow": Qrouted,
-            "mopex_prerouting": Q_mean,
-            "et": ET_mean,
             "target": x_dict["target"],
         }
+
+        # save weights - 扩展到 [n_steps, n_grid, 1] 以便保存
+        for weight_name in self.weight_names:
+            # weights[weight_name] 形状: [n_grid]
+            # 扩展到 [n_steps, n_grid, 1]
+            result[weight_name] = (
+                weights[weight_name].unsqueeze(0).repeat(n_steps, 1, 1)
+            ).permute(0, 2, 1)
 
         # 截断warmup
         if not self.warm_up_states:
             for key in result:
                 if result[key] is not None:
                     result[key] = result[key][self.pred_cutoff :]
-
-        # save weights - 扩展到 [n_steps, n_grid, nmul] 以便保存
-        for weight_name in self.weight_names:
-            # weights[weight_name] 形状: [n_grid]
-            # 扩展到 [n_steps, n_grid, nmul]
-            result[weight_name] = (
-                weights[weight_name]
-                .unsqueeze(0)
-                .unsqueeze(-1)
-                .repeat(n_steps, 1, self.nmul)
-            )
 
         return result
