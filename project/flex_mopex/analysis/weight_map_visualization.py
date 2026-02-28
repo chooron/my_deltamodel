@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 # Paths for weight arrays
-alpha = "0_05"
+alpha = "0"
 base_data_path = Path(
     "/workspace/my_deltamodel/project/flex_mopex/output/camels_671/"
     "train1980-1995/no_multi/"

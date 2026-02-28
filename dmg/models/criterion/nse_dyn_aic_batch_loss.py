@@ -6,16 +6,21 @@ import torch
 from dmg.models.criterion.base import BaseCriterion
 
 
-class NseAicBatchLoss(BaseCriterion):
+class NseDynAicBatchLoss(BaseCriterion):
     """
-    NSE Loss with Soft-AIC Regularization for Structural Sparsity.
+    NSE Loss with Soft-AIC Regularization for Dynamic Structural Sparsity.
+
+    与 NseAicBatchLoss 的区别：
+    - 针对动态权重（时变权重），先计算时间维度的平均值
+    - 然后再计算AIC惩罚，避免AIC值过大
 
     Minimizes:
         L = NSE_Loss + alpha * (Effective_Parameter_Count)
 
     where:
         NSE_Loss = mean((pred - obs)^2 / (std_obs + eps)^2)
-        Effective_Parameter_Count = sum(weight_i * cost_i)
+        Effective_Parameter_Count = sum(mean_weight_i * cost_i)
+        mean_weight_i = mean(weight_i, dim=time)  # 时间维度平均
 
     This encourages the model to turn off unnecessary structural modules (weights -> 0)
     unless they significantly improve the NSE.
@@ -39,7 +44,7 @@ class NseAicBatchLoss(BaseCriterion):
         **kwargs: Union[torch.Tensor, float],
     ) -> None:
         super().__init__(config, device)
-        self.name = "Batch NSE Loss with Soft-AIC"
+        self.name = "Batch NSE Loss with Dynamic Soft-AIC"
         self.config = config
         self.device = device
 
@@ -117,17 +122,26 @@ class NseAicBatchLoss(BaseCriterion):
             loss_fit = torch.tensor(0.0, device=self.device)
 
         # ============================================================
-        # 2. AIC Penalty (预留，当前未启用)
+        # 2. Dynamic AIC Penalty (针对时变权重)
         # ============================================================
         weights_dict = kwargs.get("weights", None)
         loss_complexity = torch.tensor(0.0, device=self.device)
+
         if weights_dict is not None:
             for name, cost in self.param_costs.items():
                 if name in weights_dict:
                     w = weights_dict[name]
                     # w shape: [n_steps, n_grid, 1]
-                    w = w[0, :, 0]
-                    loss_complexity += torch.mean(w) * cost
+
+                    # 关键修改：先计算时间维度的平均值
+                    # 这样可以避免AIC值过大，因为每个时间步都会贡献一次
+                    w_time_avg = torch.mean(w, dim=0)  # [n_grid, 1]
+
+                    # 然后计算空间维度的平均值
+                    w_spatial_avg = torch.mean(w_time_avg)  # scalar
+
+                    # 累加到复杂度损失
+                    loss_complexity += w_spatial_avg * cost
 
         # ============================================================
         # 3. 组合 Loss

@@ -135,3 +135,4 @@ class MultiHeadNet(nn.Module):
                 raise ValueError(f"NaN detected in head '{head_name}' output!")
 
         return out_dict
+

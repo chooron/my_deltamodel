@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python test_multihead_init.py)",
+      "Bash(python check_data_nan.py)",
+      "Bash(tr ';' '\\\\n')",
+      "Bash(python project/hydro_selection/analysis/weight_map_visualization.py)",
+      "Bash(ls -lh /workspace/my_deltamodel/project/hydro_selection/analysis/model_weights_map_*.png)",
+      "Bash(ls:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)"
+    ]
+  }
+}
