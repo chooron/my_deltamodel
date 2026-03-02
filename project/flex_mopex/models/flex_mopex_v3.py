@@ -17,6 +17,7 @@ class WeightMLPGate(nn.Module):
         static_size: int = 0,  # 静态属性维度
         hidden_size: int = 32,
         num_weights: int = 4,  # 4个过程权重
+        dropout: float = 0.0,  # Dropout rate
     ):
         super().__init__()
 
@@ -25,7 +26,9 @@ class WeightMLPGate(nn.Module):
 
         # MLP层
         self.fc1 = nn.Linear(input_size, hidden_size)
+        self.dropout1 = nn.Dropout(dropout)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.dropout2 = nn.Dropout(dropout)
         # 输出层：预测每个权重的2个logits (Off/On)
         self.fc_out = nn.Linear(hidden_size, num_weights * 2)
 
@@ -50,9 +53,11 @@ class WeightMLPGate(nn.Module):
             inputs.append(static_attrs)
         x = torch.cat(inputs, dim=-1)  # [n_grid, state_size + forcing_size + static_size]
 
-        # MLP前向传播
+        # MLP前向传播（带dropout）
         h = F.relu(self.fc1(x))
+        h = self.dropout1(h)
         h = F.relu(self.fc2(h))
+        h = self.dropout2(h)
         weights_logits = self.fc_out(h)  # [n_grid, 8]
 
         # 重塑为 [n_grid, 4, 2]
@@ -97,7 +102,7 @@ class FlexMopexV3(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.name = "FlexMopexV1MLPGate"
+        self.name = "FlexMopexV3"
         self.config = config or {}
         self.warm_up = 0
         self.pred_cutoff = 0
@@ -107,21 +112,19 @@ class FlexMopexV3(nn.Module):
         self.nmul = 1
         self.activate = F.sigmoid
 
-        # MOPEX 模型参数
+        # MOPEX 模型参数（全部为静态参数）
         self.mopex_param_names = list(self.MOPEX_PARAMS_BOUNDS.keys())
         self.routing_param_names = list(self.ROUTING_BOUNDS.keys())
         self.weight_names = ["w_phen", "w_int", "w_snow", "w_sub"]
-
-        # MLP Gate配置
-        self.mlp_hidden_size = config.get("mlp_hidden_size", 32) if config else 32
-        self.static_size = config.get("static_size", 0) if config else 0  # 静态属性维度
-
-        # 总参数数量：模型参数 * nmul + 路由参数
-        # 注意：权重现在由MLP Gate预测，不再从MultiHeadNet输出
         self.learnable_param_count = (
             len(self.mopex_param_names) * self.nmul
             + len(self.routing_param_names)
         )
+
+        # MLP Gate配置
+        self.mlp_hidden_size = config.get("mlp_hidden_size", 128) if config else 128
+        self.mlp_dropout = config.get("mlp_dropout", 0.0) if config else 0.0
+        self.static_size = config.get("static_size", 35) if config else 35  # 静态属性维度
 
         self.device = device or torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
@@ -134,6 +137,7 @@ class FlexMopexV3(nn.Module):
             static_size=self.static_size,  # 静态属性
             hidden_size=self.mlp_hidden_size,
             num_weights=len(self.weight_names),
+            dropout=self.mlp_dropout,  # 添加dropout
         ).to(self.device)
 
         if config is not None:
@@ -183,22 +187,24 @@ class FlexMopexV3(nn.Module):
         self, parameters: Dict[str, torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        解包参数（从MultiHeadNet字典输出提取）
+        解包参数（从MultiHeadNetStatic字典输出提取）
 
         Args:
-            parameters: 字典，包含 MOPEX 参数和路由参数
-                例如: {"params": [B, 12*nmul], "gamma_uh": [B, 2]}
-                注意：不再包含weights，因为权重由MLP Gate动态生成
+            parameters: 字典，包含静态参数和路由参数
+                例如: {
+                    "static_params": [B, 12*nmul],
+                    "gamma_uh": [B, 2]
+                }
 
         Returns:
             - mopex_params: MOPEX 模型参数 [B, 12, nmul]
             - routing_params: 路由参数 [B, 2]
         """
-        # 提取并激活 MOPEX 参数（使用sigmoid）
-        raw_mopex = self.activate(parameters["params"])
-        mopex_params = raw_mopex.view(
-            raw_mopex.shape[0], len(self.mopex_param_names), self.nmul
-        )
+        # 提取并激活静态参数
+        raw_static = self.activate(parameters["static_params"])
+        mopex_params = raw_static.view(
+            raw_static.shape[0], len(self.mopex_param_names), self.nmul
+        )  # [B, 12, nmul]
 
         # 提取并激活路由参数
         routing_params = self.activate(parameters["gamma_uh"])
@@ -297,14 +303,14 @@ class FlexMopexV3(nn.Module):
         n_grid: int,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        MOPEX 模型的时间循环（使用MLP Gate动态权重）
+        MOPEX 模型的时间循环（使用MLP Gate动态权重 + 静态参数）
 
         Args:
             P: [n_steps, n_grid, nmul]
             T: [n_steps, n_grid, nmul]
             PET: [n_steps, n_grid, nmul]
             doy: [n_steps, n_grid, nmul]
-            mopex_params: MOPEX 参数字典
+            mopex_params: MOPEX 参数字典（所有参数都是静态的 [n_grid, nmul]）
             static_attrs: [n_grid, static_size] 静态属性
             n_steps: 时间步数
             n_grid: 网格数
@@ -345,7 +351,7 @@ class FlexMopexV3(nn.Module):
             w_snow_t = weights_t[:, 2].unsqueeze(-1).repeat(1, self.nmul)
             w_sub_t = weights_t[:, 3].unsqueeze(-1).repeat(1, self.nmul)
 
-            # 调用编译后的 mopex_step
+            # 调用编译后的 mopex_step（所有参数都是静态的）
             Q, ET, S1, S2, Sc1, Sc2, Sn = self.mopex_step_compiled(
                 P_t,
                 T_t,
@@ -356,7 +362,7 @@ class FlexMopexV3(nn.Module):
                 w_int_t,
                 w_snow_t,
                 w_sub_t,
-                # 模型参数
+                # 静态参数
                 mopex_params["Sb1"],
                 mopex_params["tw"],
                 mopex_params["tu"],
@@ -405,9 +411,9 @@ class FlexMopexV3(nn.Module):
                 - 'c_nn_norm': [n_grid, static_size] 静态属性
                 - 'doy': [n_steps, n_grid] 日序
                 - 'target': [n_steps, n_grid, 1] 目标值
-            parameters: MultiHeadNet输出的字典
-                       {"params": tensor, "gamma_uh": tensor}
-                       注意：不再包含weights
+            parameters: MultiHeadNetStatic输出的字典
+                       {"static_params": tensor, "gamma_uh": tensor}
+                       注意：不包含weights，权重由内部WeightMLPGate动态生成
 
         Returns:
             包含'streamflow'等输出的字典
@@ -417,7 +423,7 @@ class FlexMopexV3(nn.Module):
         if not self.warm_up_states:
             self.pred_cutoff = self.warm_up
 
-        # 解包参数（不包含weights）
+        # 解包参数（全部为静态参数）
         mopex_params_raw, routing_raw = self.unpack_parameters(parameters)
 
         # 反归一化参数
@@ -451,7 +457,7 @@ class FlexMopexV3(nn.Module):
         )
         doy = x_dict["doy"].repeat(1, 1, self.nmul)
 
-        # MOPEX 时间循环（使用MLP Gate动态权重）
+        # MOPEX 时间循环（使用MLP Gate动态权重 + 静态参数）
         Q_mopex, ET_mopex, weights_dynamic = self._mopex_timestep_loop(
             P, T, PET, doy, mopex_params, static_attrs, n_steps, n_grid
         )
