@@ -185,31 +185,44 @@ class FlexMopexV3(nn.Module):
 
     def unpack_parameters(
         self, parameters: Dict[str, torch.Tensor]
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
         """
-        解包参数（从MultiHeadNetStatic字典输出提取）
+        解包参数（从MultiHeadNetParam字典输出提取）
 
         Args:
-            parameters: 字典，包含静态参数和路由参数
+            parameters: 字典，包含静态参数、动态参数和路由参数
                 例如: {
-                    "static_params": [B, 12*nmul],
+                    "static_params": [B, 8*nmul],  # Sb1, tw, tu, tc, tcrit, is_time, tmin, tmax
+                    "dynamic_params": [n_steps, B, 4*nmul],  # ddf, alpha, Sb2, Se
                     "gamma_uh": [B, 2]
                 }
 
         Returns:
-            - mopex_params: MOPEX 模型参数 [B, 12, nmul]
+            - static_params_dict: 静态MOPEX参数字典 {param_name: [B, nmul]}
+            - dynamic_params_raw: 动态参数 [n_steps, B, 4*nmul]
             - routing_params: 路由参数 [B, 2]
         """
-        # 提取并激活静态参数
+        # 提取并激活静态参数 (8个)
         raw_static = self.activate(parameters["static_params"])
-        mopex_params = raw_static.view(
-            raw_static.shape[0], len(self.mopex_param_names), self.nmul
-        )  # [B, 12, nmul]
+        static_param_names = ["Sb1", "tw", "tu", "tc", "tcrit", "is_time", "tmin", "tmax"]
+        static_params_reshaped = raw_static.view(
+            raw_static.shape[0], len(static_param_names), self.nmul
+        )  # [B, 8, nmul]
+
+        # 构建静态参数字典
+        static_params_dict = {}
+        for i, name in enumerate(static_param_names):
+            static_params_dict[name] = static_params_reshaped[:, i, :]  # [B, nmul]
+
+        # 提取动态参数（如果存在）
+        dynamic_params_raw = None
+        if "dynamic_params" in parameters:
+            dynamic_params_raw = self.activate(parameters["dynamic_params"])  # [n_steps, B, 4*nmul]
 
         # 提取并激活路由参数
         routing_params = self.activate(parameters["gamma_uh"])
 
-        return mopex_params, routing_params
+        return static_params_dict, dynamic_params_raw, routing_params
 
     def _apply_routing(
         self, Qsim: torch.Tensor, n_steps: int, n_grid: int
@@ -297,20 +310,22 @@ class FlexMopexV3(nn.Module):
         T: torch.Tensor,
         PET: torch.Tensor,
         doy: torch.Tensor,
-        mopex_params: Dict[str, torch.Tensor],
+        mopex_params_static: Dict[str, torch.Tensor],
+        mopex_params_dynamic: Dict[str, torch.Tensor],
         static_attrs: torch.Tensor,
         n_steps: int,
         n_grid: int,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        MOPEX 模型的时间循环（使用MLP Gate动态权重 + 静态参数）
+        MOPEX 模型的时间循环（使用MLP Gate动态权重 + 静态/动态参数）
 
         Args:
             P: [n_steps, n_grid, nmul]
             T: [n_steps, n_grid, nmul]
             PET: [n_steps, n_grid, nmul]
             doy: [n_steps, n_grid, nmul]
-            mopex_params: MOPEX 参数字典（所有参数都是静态的 [n_grid, nmul]）
+            mopex_params_static: 静态MOPEX参数字典 {param_name: [n_grid, nmul]}
+            mopex_params_dynamic: 动态MOPEX参数字典 {param_name: [n_steps, n_grid, nmul]}
             static_attrs: [n_grid, static_size] 静态属性
             n_steps: 时间步数
             n_grid: 网格数
@@ -351,7 +366,20 @@ class FlexMopexV3(nn.Module):
             w_snow_t = weights_t[:, 2].unsqueeze(-1).repeat(1, self.nmul)
             w_sub_t = weights_t[:, 3].unsqueeze(-1).repeat(1, self.nmul)
 
-            # 调用编译后的 mopex_step（所有参数都是静态的）
+            # 获取当前时间步的动态参数（如果存在）
+            if mopex_params_dynamic:
+                ddf_t = mopex_params_dynamic["ddf"][t]  # [n_grid, nmul]
+                alpha_t = mopex_params_dynamic["alpha"][t]
+                Sb2_t = mopex_params_dynamic["Sb2"][t]
+                Se_t = mopex_params_dynamic["Se"][t]
+            else:
+                # 如果没有动态参数，使用静态参数（向后兼容）
+                ddf_t = mopex_params_static.get("ddf", torch.zeros(n_grid, self.nmul, device=self.device))
+                alpha_t = mopex_params_static.get("alpha", torch.zeros(n_grid, self.nmul, device=self.device))
+                Sb2_t = mopex_params_static.get("Sb2", torch.zeros(n_grid, self.nmul, device=self.device))
+                Se_t = mopex_params_static.get("Se", torch.zeros(n_grid, self.nmul, device=self.device))
+
+            # 调用编译后的 mopex_step（静态参数 + 当前时间步的动态参数）
             Q, ET, S1, S2, Sc1, Sc2, Sn = self.mopex_step_compiled(
                 P_t,
                 T_t,
@@ -363,18 +391,18 @@ class FlexMopexV3(nn.Module):
                 w_snow_t,
                 w_sub_t,
                 # 静态参数
-                mopex_params["Sb1"],
-                mopex_params["tw"],
-                mopex_params["tu"],
-                mopex_params["Se"],
-                mopex_params["tc"],
-                mopex_params["ddf"],
-                mopex_params["tcrit"],
-                mopex_params["Sb2"],
-                mopex_params["alpha"],
-                mopex_params["is_time"],
-                mopex_params["tmin"],
-                mopex_params["tmax"],
+                mopex_params_static["Sb1"],
+                mopex_params_static["tw"],
+                mopex_params_static["tu"],
+                Se_t,  # 动态参数
+                mopex_params_static["tc"],
+                ddf_t,  # 动态参数
+                mopex_params_static["tcrit"],
+                Sb2_t,  # 动态参数
+                alpha_t,  # 动态参数
+                mopex_params_static["is_time"],
+                mopex_params_static["tmin"],
+                mopex_params_static["tmax"],
                 # 状态变量
                 states["S1"],
                 states["S2"],
@@ -419,20 +447,45 @@ class FlexMopexV3(nn.Module):
             包含'streamflow'等输出的字典
         """
         x = x_dict["x_phy"]
+        n_steps, n_grid = x.shape[:2]
 
         if not self.warm_up_states:
             self.pred_cutoff = self.warm_up
 
-        # 解包参数（全部为静态参数）
-        mopex_params_raw, routing_raw = self.unpack_parameters(parameters)
+        # 解包参数（静态 + 动态）
+        static_params_dict, dynamic_params_raw, routing_raw = self.unpack_parameters(parameters)
 
-        # 反归一化参数
-        mopex_params = self._descale_params(
-            mopex_params_raw, self.mopex_param_names, self.MOPEX_PARAMS_BOUNDS
-        )
+        # 反归一化静态参数
+        static_param_names = ["Sb1", "tw", "tu", "tc", "tcrit", "is_time", "tmin", "tmax"]
+        mopex_params_static = {}
+        for name in static_param_names:
+            param_raw = static_params_dict[name].unsqueeze(1)  # [B, 1, nmul]
+            param_descaled = change_param_range(
+                param_raw,
+                self.MOPEX_PARAMS_BOUNDS[name],
+            ).squeeze(1)  # [B, nmul]
+            mopex_params_static[name] = param_descaled
+
+        # 反归一化动态参数
+        dynamic_param_names = ["ddf", "alpha", "Sb2", "Se"]
+        mopex_params_dynamic = {}
+        if dynamic_params_raw is not None:
+            # dynamic_params_raw: [n_steps, B, 4*nmul]
+            n_steps_param = dynamic_params_raw.shape[0]
+            dynamic_params_reshaped = dynamic_params_raw.view(
+                n_steps_param, n_grid, len(dynamic_param_names), self.nmul
+            )  # [n_steps, B, 4, nmul]
+
+            for i, name in enumerate(dynamic_param_names):
+                param_raw = dynamic_params_reshaped[:, :, i, :]  # [n_steps, B, nmul]
+                # 对每个时间步进行反归一化
+                param_descaled = change_param_range(
+                    param_raw,
+                    self.MOPEX_PARAMS_BOUNDS[name],
+                )
+                mopex_params_dynamic[name] = param_descaled  # [n_steps, B, nmul]
+
         self.routing_param_dict = self._descale_routing_params(routing_raw)
-
-        n_steps, n_grid = x.shape[:2]
 
         # 提取静态属性（如果存在）
         static_attrs = None
@@ -457,9 +510,9 @@ class FlexMopexV3(nn.Module):
         )
         doy = x_dict["doy"].repeat(1, 1, self.nmul)
 
-        # MOPEX 时间循环（使用MLP Gate动态权重 + 静态参数）
+        # MOPEX 时间循环（使用MLP Gate动态权重 + 静态/动态参数）
         Q_mopex, ET_mopex, weights_dynamic = self._mopex_timestep_loop(
-            P, T, PET, doy, mopex_params, static_attrs, n_steps, n_grid
+            P, T, PET, doy, mopex_params_static, mopex_params_dynamic, static_attrs, n_steps, n_grid
         )
 
         # 平均 nmul 维度

@@ -16,7 +16,7 @@ from project.flex_mopex import load_config  # noqa: E402
 
 #------------------------------------------#
 # Define model settings here. 3555MiB
-CONFIG_PATH = r'conf/config_dmopex_v3_alpha_0.yaml'
+CONFIG_PATH = r'conf/config_fmopex_v1.yaml'
 #------------------------------------------#
 # model training
 config = load_config(CONFIG_PATH)
