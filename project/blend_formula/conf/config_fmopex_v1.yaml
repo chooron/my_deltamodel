@@ -57,7 +57,7 @@ delta_model:
 
   phy_model:
     directory: project\flex_mopex\models
-    model: [DiffMopexV1]
+    model: [FlexMopexV3]
     nmul: 16
     warm_up: 365
     warm_up_states: False

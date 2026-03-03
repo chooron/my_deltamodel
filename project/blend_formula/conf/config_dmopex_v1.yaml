@@ -48,8 +48,7 @@ simulation:
 
 ## Loss Function -------------------------#
 loss_function:
-  model: NseBatchLoss
-  aic_alpha: 0.0
+  model: NseAicBatchLoss
 
 ## Differentiable Model -----------------------------#
 delta_model:
@@ -57,7 +56,7 @@ delta_model:
 
   phy_model:
     directory: project\flex_mopex\models
-    model: [DiffMopexV1]
+    model: [FlexMopexV1]
     nmul: 16
     warm_up: 365
     warm_up_states: False
@@ -69,10 +68,9 @@ delta_model:
 
   nn_model:
     directory: project\flex_mopex\models
-    model: MultiHeadNetParam
+    model: MultiHeadNet
     dr: 0.5
     hidden_size: 128
-    lstm_hidden_size: 128
 
     forcings: [prcp, tmean, pet]
     attributes:

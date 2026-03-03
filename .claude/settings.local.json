@@ -8,7 +8,8 @@
       "Bash(ls -lh /workspace/my_deltamodel/project/hydro_selection/analysis/model_weights_map_*.png)",
       "Bash(ls:*)",
       "Bash(python:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(cat:*)"
     ]
   }
 }

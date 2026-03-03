@@ -13,8 +13,8 @@ data_loader: HydroLoader
 data_sampler: HydroSampler
 trainer: Trainer
 save_output: true
-save_path: project/flex_mopex/output
-trained_model: project/flex_mopex/output/model/
+save_path: project/flex_mopex/output/flex_mopex_v3/alpha_0_001/
+trained_model: project/flex_mopex/output/flex_mopex_v3/alpha_0_001/model/
 
 ## Training ------------------------------#
 train:
@@ -48,8 +48,8 @@ simulation:
 
 ## Loss Function -------------------------#
 loss_function:
-  model: NseBatchLoss
-  aic_alpha: 0.0
+  model: NseDynAicBatchLoss
+  aic_alpha: 0.001
 
 ## Differentiable Model -----------------------------#
 delta_model:
@@ -57,7 +57,7 @@ delta_model:
 
   phy_model:
     directory: project\flex_mopex\models
-    model: [DiffMopexV1]
+    model: [FlexMopexV3]
     nmul: 16
     warm_up: 365
     warm_up_states: False
@@ -69,10 +69,9 @@ delta_model:
 
   nn_model:
     directory: project\flex_mopex\models
-    model: MultiHeadNetParam
+    model: MultiHeadNetStatic
     dr: 0.5
     hidden_size: 128
-    lstm_hidden_size: 128
 
     forcings: [prcp, tmean, pet]
     attributes:

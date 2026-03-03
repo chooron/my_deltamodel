@@ -73,7 +73,8 @@ class MultiHeadNetDyn(nn.Module):
         )
 
         # LSTM输出层：预测每个权重的2个logits (Off/On)
-        self.weight_fc = nn.Linear(lstm_hidden_size, 4 * 2)  # 4个过程，每个2个状态
+        # self.weight_fc = nn.Linear(lstm_hidden_size, 4 * 2)  # 4个过程，每个2个状态 for softmax
+        self.weight_fc = nn.Linear(lstm_hidden_size, 4)  # 4个过程，每个2个状态 for sigmoid
 
         # 4. 权重初始化
         self._initialize_weights()
