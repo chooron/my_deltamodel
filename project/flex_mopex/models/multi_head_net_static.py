@@ -111,22 +111,31 @@ class MultiHeadNetStatic(nn.Module):
         x_attr = x["c_nn_norm"]
 
         # 检查输入
-        if self.training and torch.isnan(x_attr).any():
+        if torch.isnan(x_attr).any():
             print(f"[ERROR] NaN in static input!")
             x_attr = torch.nan_to_num(x_attr, nan=0.0)
 
         shared_feat = self.backbone(x_attr)
 
+        # 检查中间特征
+        if torch.isnan(shared_feat).any():
+            print(f"[ERROR] NaN in backbone output!")
+            shared_feat = torch.nan_to_num(shared_feat, nan=0.0)
+
         # 2. 各头独立输出
         out_dict = {}
         for head_name, head_net in self.heads.items():
-            out_dict[head_name] = head_net(shared_feat)
+            out = head_net(shared_feat)
+            # 裁剪输出防止极端值
+            out = torch.clamp(out, min=-10.0, max=10.0)
+            out_dict[head_name] = out
 
         # 检查输出
         if self.training:
             for key, value in out_dict.items():
                 if torch.isnan(value).any():
                     print(f"[ERROR] NaN in {key} output!")
+                    print(f"[DEBUG] shared_feat stats: min={shared_feat.min()}, max={shared_feat.max()}, mean={shared_feat.mean()}")
                     raise ValueError(f"NaN detected in {key} output!")
 
         return out_dict

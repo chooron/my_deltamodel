@@ -2,6 +2,7 @@ import os
 import sys
 
 from dotenv import load_dotenv
+import yaml
 
 load_dotenv()
 
@@ -16,8 +17,28 @@ from project.flex_mopex import load_config  # noqa: E402
 
 #------------------------------------------#
 # Define model settings here. 3555MiB
-CONFIG_PATH = r'conf/config_dmopex_v3_1_alpha_0_1.yaml'
+CONFIG_PATH = r'conf/config_dmopex_v1.yaml'
 #------------------------------------------#
+
+
+def update_yaml_with_alpha(config_path: str, alpha: float) -> None:
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config_yaml = yaml.safe_load(f)
+
+    config_yaml['loss_function']['aic_alpha'] = alpha
+    config_yaml['save_path'] = f'project/flex_mopex/output/alpha_{alpha:g}'
+    config_yaml['trained_model'] = f"{config_yaml['save_path']}/model/"
+
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.safe_dump(config_yaml, f, allow_unicode=True, sort_keys=False)
+
+
+if len(sys.argv) < 2:
+    raise ValueError('请传入 alpha 参数，例如: python run_model.py 0.1')
+
+alpha = float(sys.argv[1])
+update_yaml_with_alpha(CONFIG_PATH, alpha)
+
 # model training
 config = load_config(CONFIG_PATH)
 config['mode'] = 'train'
@@ -38,7 +59,7 @@ print(f"Training complete. Model saved to \n{config['model_path']}")
 
 # model evaluation
 config['mode'] = 'test'
-config['test']['test_epoch'] = 45
+config['test']['test_epoch'] = 50
 set_randomseed(config['random_seed'])
 
 model = ModelHandler(config, verbose=True)

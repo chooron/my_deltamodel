@@ -12,37 +12,40 @@ from dmg.core.utils import (  # noqa: E402
     import_trainer,
     set_randomseed,
 )
-from project.hydro_selection import load_config  # noqa: E402
+from project.flex_mopex import load_config  # noqa: E402
 
-# ------------------------------------------#
+#------------------------------------------#
 # Define model settings here. 3555MiB
-CONFIG_PATH = r"conf/config_dblend_v3_ann.yaml"
-# ------------------------------------------#
+CONFIG_PATH = r'conf/config_dmopex_v1.yaml'
+#------------------------------------------#
 # model training
 config = load_config(CONFIG_PATH)
-config["mode"] = "train"
-set_randomseed(config["random_seed"])
+config['mode'] = 'train'
+set_randomseed(config['random_seed'])
 model = ModelHandler(config, verbose=True)
-data_loader_cls = import_data_loader(config["data_loader"])
+data_loader_cls = import_data_loader(config['data_loader'])
 data_loader = data_loader_cls(config, test_split=True, overwrite=False)
-trainer_cls = import_trainer(config["trainer"])
+trainer_cls = import_trainer(config['trainer'])
 trainer = trainer_cls(
-    config, model, train_dataset=data_loader.train_dataset, verbose=True
+    config,
+    model,
+    train_dataset=data_loader.train_dataset,
+    verbose=True
 )
 
 trainer.train()
 print(f"Training complete. Model saved to \n{config['model_path']}")
 
 # model evaluation
-config["mode"] = "test"
-config["test"]["test_epoch"] = 50
-set_randomseed(config["random_seed"])
+config['mode'] = 'test'
+config['test']['test_epoch'] = 45
+set_randomseed(config['random_seed'])
 
 model = ModelHandler(config, verbose=True)
-data_loader_cls = import_data_loader(config["data_loader"])
+data_loader_cls = import_data_loader(config['data_loader'])
 data_loader = data_loader_cls(config, test_split=True, overwrite=False)
 
-trainer_cls = import_trainer(config["trainer"])
+trainer_cls = import_trainer(config['trainer'])
 trainer = trainer_cls(
     config,
     model,
@@ -50,6 +53,6 @@ trainer = trainer_cls(
     verbose=True,
 )
 
-print("Evaluating model...")
+print('Evaluating model...')
 trainer.evaluate()
 print(f"Metrics and predictions saved to \n{config['out_path']}")

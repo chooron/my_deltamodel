@@ -49,6 +49,7 @@ simulation:
 ## Loss Function -------------------------#
 loss_function:
   model: NseAicBatchLoss
+  aic_alpha: 0.0
 
 ## Differentiable Model -----------------------------#
 delta_model:

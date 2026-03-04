@@ -7,8 +7,76 @@ from dmg.models.hydrodl2 import change_param_range, uh_conv, uh_gamma
 from project.flex_mopex.models import mopex_core
 
 
+class WeightMLPGate(nn.Module):
+    """MLP门控网络用于基于内部状态、气象输入和静态属性预测动态权重"""
+
+    def __init__(
+        self,
+        state_size: int = 5,  # S1, S2, Sc1, Sc2, Sn
+        forcing_size: int = 3,  # P, T, PET
+        static_size: int = 0,  # 静态属性维度
+        hidden_size: int = 32,
+        num_weights: int = 4,  # 4个过程权重
+        dropout: float = 0.0,  # Dropout rate
+    ):
+        super().__init__()
+
+        # 总输入维度 = 状态 + 气象强迫 + 静态属性
+        input_size = state_size + forcing_size + static_size
+
+        # MLP层
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.dropout1 = nn.Dropout(dropout)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.dropout2 = nn.Dropout(dropout)
+        # 输出层：预测每个权重的2个logits (Off/On)
+        self.fc_out = nn.Linear(hidden_size, num_weights * 2)
+
+    def forward(
+        self,
+        states: torch.Tensor,
+        forcings: torch.Tensor,
+        static_attrs: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            states: [n_grid, 5] 内部状态变量 (S1, S2, Sc1, Sc2, Sn)
+            forcings: [n_grid, 3] 气象强迫 (P, T, PET)
+            static_attrs: [n_grid, static_size] 静态属性 (可选)
+
+        Returns:
+            weights_logits: [n_grid, 4, 2] 权重logits
+        """
+        # 拼接输入
+        inputs = [states, forcings]
+        if static_attrs is not None:
+            inputs.append(static_attrs)
+        x = torch.cat(inputs, dim=-1)  # [n_grid, state_size + forcing_size + static_size]
+
+        # MLP前向传播（带dropout）
+        h = F.relu(self.fc1(x))
+        h = self.dropout1(h)
+        h = F.relu(self.fc2(h))
+        h = self.dropout2(h)
+        weights_logits = self.fc_out(h)  # [n_grid, 8]
+
+        # 重塑为 [n_grid, 4, 2]
+        weights_logits = weights_logits.view(-1, 4, 2)
+
+        return weights_logits
+
+
 class DiffMopexV1(nn.Module):
-    """MOPEX 水文模型：动态参数版本 (ddf, alpha, Sb2, Se 动态预测)"""
+    """MOPEX 水文模型：MLP Gate动态权重 + 物理参数 + torch.compile
+
+    版本一：MLP Gate 基于内部状态预测动态权重
+    - 权重不再是静态的，而是由MLP在每个时间步根据前一时间步的内部状态动态生成
+    - MLP读取上一步的模型内部物理状态（土壤含水量、积雪储量等），输出四个过程的激活概率
+    - 使用前一时间步的状态变量而非当前时间步，以避免同步循环依赖
+    - 训练时保持现有预热机制：730天输入，365天预热，仅后365天计算损失
+    - 预热期内MLP Gate同样参与前向传播使内部状态充分演化，但不参与梯度更新
+    - AIC稀疏正则化仍作用于每个时间步的weights_on
+    """
 
     MOPEX_PARAMS_BOUNDS = {
         "Sb1": [0.01, 50.0],
@@ -34,7 +102,7 @@ class DiffMopexV1(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.name = "FlexMopexV4"
+        self.name = "DiffMopexV1"
         self.config = config or {}
         self.warm_up = 0
         self.pred_cutoff = 0
@@ -44,26 +112,33 @@ class DiffMopexV1(nn.Module):
         self.nmul = 1
         self.activate = F.sigmoid
 
-        # MOPEX 模型参数
+        # MOPEX 模型参数（全部为静态参数）
         self.mopex_param_names = list(self.MOPEX_PARAMS_BOUNDS.keys())
         self.routing_param_names = list(self.ROUTING_BOUNDS.keys())
-
-        # 动态参数：由网络预测
-        self.dynamic_param_names = ["ddf", "alpha", "Sb2", "Se"]
-
-        # 静态参数：保持固定（从静态属性预测，但不随时间变化）
-        self.static_param_names = [p for p in self.mopex_param_names if p not in self.dynamic_param_names]
-
-        # 总参数数量：静态参数 * nmul + 路由参数
-        # 动态参数由 MultiHeadNetParam 预测，不计入此处
+        self.weight_names = ["w_phen", "w_int", "w_snow", "w_sub"]
         self.learnable_param_count = (
-            len(self.static_param_names) * self.nmul
+            len(self.mopex_param_names) * self.nmul
             + len(self.routing_param_names)
         )
+
+        # MLP Gate配置
+        self.mlp_hidden_size = config.get("mlp_hidden_size", 128) if config else 128
+        self.mlp_dropout = config.get("mlp_dropout", 0.0) if config else 0.0
+        self.static_size = config.get("static_size", 35) if config else 35  # 静态属性维度
 
         self.device = device or torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
+
+        # 初始化MLP Gate权重预测器
+        self.weight_mlp_gate = WeightMLPGate(
+            state_size=5,  # S1, S2, Sc1, Sc2, Sn
+            forcing_size=3,  # P, T, PET
+            static_size=self.static_size,  # 静态属性
+            hidden_size=self.mlp_hidden_size,
+            num_weights=len(self.weight_names),
+            dropout=self.mlp_dropout,  # 添加dropout
+        ).to(self.device)
 
         if config is not None:
             self._load_config(config)
@@ -84,8 +159,10 @@ class DiffMopexV1(nn.Module):
                 setattr(self, attr, config[attr])
 
     def _setup_compiled_kernels(self) -> None:
-        """使用 torch.compile 编译 mopex_step_static 函数"""
-        self.mopex_step_compiled = torch.compile(mopex_core.mopex_step_static)
+        """使用 torch.compile 编译关键函数以提升性能"""
+        self.mopex_step_compiled = torch.compile(mopex_core.mopex_step)
+        # 编译 MLP Gate 以提升权重预测速度
+        self.weight_mlp_gate = torch.compile(self.weight_mlp_gate)
 
     def _descale_params(
         self,
@@ -110,38 +187,44 @@ class DiffMopexV1(nn.Module):
 
     def unpack_parameters(
         self, parameters: Dict[str, torch.Tensor]
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
         """
         解包参数（从MultiHeadNetParam字典输出提取）
 
         Args:
             parameters: 字典，包含静态参数、动态参数和路由参数
-                例如: {"static_params": [B, 8*nmul],
-                      "dynamic_params": [n_steps, B, 4*nmul],
-                      "gamma_uh": [B, 2]}
+                例如: {
+                    "static_params": [B, 8*nmul],  # Sb1, tw, tu, tc, tcrit, is_time, tmin, tmax
+                    "dynamic_params": [n_steps, B, 4*nmul],  # ddf, alpha, Sb2, Se
+                    "gamma_uh": [B, 2]
+                }
 
         Returns:
-            - static_params: 静态 MOPEX 参数 [B, 8, nmul]
-            - dynamic_params: 动态 MOPEX 参数 [n_steps, B, 4, nmul]
+            - static_params_dict: 静态MOPEX参数字典 {param_name: [B, nmul]}
+            - dynamic_params_raw: 动态参数 [n_steps, B, 4*nmul]
             - routing_params: 路由参数 [B, 2]
         """
-        # 提取并激活静态参数
+        # 提取并激活静态参数 (8个)
         raw_static = self.activate(parameters["static_params"])
-        static_params = raw_static.view(
-            raw_static.shape[0], len(self.static_param_names), self.nmul
-        )
+        static_param_names = ["Sb1", "tw", "tu", "tc", "tcrit", "is_time", "tmin", "tmax"]
+        static_params_reshaped = raw_static.view(
+            raw_static.shape[0], len(static_param_names), self.nmul
+        )  # [B, 8, nmul]
 
-        # 提取并激活动态参数
-        raw_dynamic = self.activate(parameters["dynamic_params"])  # [n_steps, B, 4*nmul]
-        n_steps, batch_size, _ = raw_dynamic.shape
-        dynamic_params = raw_dynamic.view(
-            n_steps, batch_size, len(self.dynamic_param_names), self.nmul
-        )
+        # 构建静态参数字典
+        static_params_dict = {}
+        for i, name in enumerate(static_param_names):
+            static_params_dict[name] = static_params_reshaped[:, i, :]  # [B, nmul]
+
+        # 提取动态参数（如果存在）
+        dynamic_params_raw = None
+        if "dynamic_params" in parameters:
+            dynamic_params_raw = self.activate(parameters["dynamic_params"])  # [n_steps, B, 4*nmul]
 
         # 提取并激活路由参数
         routing_params = self.activate(parameters["gamma_uh"])
 
-        return static_params, dynamic_params, routing_params
+        return static_params_dict, dynamic_params_raw, routing_params
 
     def _apply_routing(
         self, Qsim: torch.Tensor, n_steps: int, n_grid: int
@@ -174,33 +257,70 @@ class DiffMopexV1(nn.Module):
             + self.nearzero,
         }
 
+    def _predict_weights_from_states(
+        self,
+        states: Dict[str, torch.Tensor],
+        forcings: torch.Tensor,
+        static_attrs: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """
+        使用MLP Gate基于内部状态、气象强迫和静态属性预测权重
+
+        Args:
+            states: 字典，包含内部状态变量
+                   每个状态形状: [n_grid, nmul]
+            forcings: [n_grid, 3] 气象强迫 (P, T, PET)
+            static_attrs: [n_grid, static_size] 静态属性 (可选)
+
+        Returns:
+            weights_on: [n_grid, 4] 权重激活概率
+        """
+        # 准备MLP输入：[n_grid, 5]
+        # 取nmul维度的第一个值（如果nmul=1，则直接squeeze）
+        state_vector = torch.stack(
+            [
+                states["S1"][:, 0],
+                states["S2"][:, 0],
+                states["Sc1"][:, 0],
+                states["Sc2"][:, 0],
+                states["Sn"][:, 0],
+            ],
+            dim=-1,
+        )  # [n_grid, 5]
+
+        # MLP前向传播
+        weights_logits = self.weight_mlp_gate(
+            state_vector, forcings, static_attrs
+        )  # [n_grid, 4, 2]
+
+        # 应用gumbel_softmax或softmax
+        weights_logits_clipped = torch.clamp(weights_logits, min=-10.0, max=10.0)
+        if self.training:
+            weights_probs = F.gumbel_softmax(
+                weights_logits_clipped, tau=1.0, hard=False, dim=-1
+            )  # [n_grid, 4, 2]
+        else:
+            weights_probs = F.softmax(weights_logits_clipped, dim=-1)
+
+        weights_on = weights_probs[..., 1]  # [n_grid, 4] - 取On状态的概率
+
+        return weights_on
+
     def _mopex_timestep_loop(
         self,
         P: torch.Tensor,
         T: torch.Tensor,
         PET: torch.Tensor,
         doy: torch.Tensor,
-        static_params: Dict[str, torch.Tensor],
-        dynamic_params: Dict[str, torch.Tensor],
+        mopex_params_static: Dict[str, torch.Tensor],
+        mopex_params_dynamic: Dict[str, torch.Tensor],
+        static_attrs: torch.Tensor,
         n_steps: int,
         n_grid: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        MOPEX 模型的时间循环（动态参数版本）
-
-        Args:
-            P: [n_steps, n_grid, nmul]
-            T: [n_steps, n_grid, nmul]
-            PET: [n_steps, n_grid, nmul]
-            doy: [n_steps, n_grid, nmul]
-            static_params: 静态参数字典，每个参数形状为 [n_grid, nmul]
-            dynamic_params: 动态参数字典，每个参数形状为 [n_steps, n_grid, nmul]
-            n_steps: 时间步数
-            n_grid: 网格数
-
-        Returns:
-            Q: 径流 [n_steps, n_grid, nmul]
-            ET: 蒸散发 [n_steps, n_grid, nmul]
+        MOPEX 模型的时间循环（使用MLP Gate动态权重 + 静态/动态参数）
+        优化版本：减少循环内的重复操作
         """
         # 初始化状态
         states = self._initialize_states(n_steps, n_grid)
@@ -208,106 +328,166 @@ class DiffMopexV1(nn.Module):
         # 预分配输出张量
         Q_out = torch.zeros(n_steps, n_grid, self.nmul, device=self.device)
         ET_out = torch.zeros(n_steps, n_grid, self.nmul, device=self.device)
+        weights_out = torch.zeros(n_steps, n_grid, 4, device=self.device)
+
+        # 预提取静态参数，避免循环内字典访问
+        Sb1 = mopex_params_static["Sb1"]
+        tw = mopex_params_static["tw"]
+        tu = mopex_params_static["tu"]
+        tc = mopex_params_static["tc"]
+        tcrit = mopex_params_static["tcrit"]
+        is_time = mopex_params_static["is_time"]
+        tmin = mopex_params_static["tmin"]
+        tmax = mopex_params_static["tmax"]
+
+        # 预提取动态参数（如果存在）
+        has_dynamic = bool(mopex_params_dynamic)
+        if has_dynamic:
+            ddf_all = mopex_params_dynamic["ddf"]  # [n_steps, n_grid, nmul]
+            alpha_all = mopex_params_dynamic["alpha"]
+            Sb2_all = mopex_params_dynamic["Sb2"]
+            Se_all = mopex_params_dynamic["Se"]
+        else:
+            # 使用静态参数作为后备
+            ddf_static = mopex_params_static.get("ddf", torch.zeros(n_grid, self.nmul, device=self.device))
+            alpha_static = mopex_params_static.get("alpha", torch.zeros(n_grid, self.nmul, device=self.device))
+            Sb2_static = mopex_params_static.get("Sb2", torch.zeros(n_grid, self.nmul, device=self.device))
+            Se_static = mopex_params_static.get("Se", torch.zeros(n_grid, self.nmul, device=self.device))
+
+        # 预提取状态变量引用
+        S1, S2, Sc1, Sc2, Sn = states["S1"], states["S2"], states["Sc1"], states["Sc2"], states["Sn"]
 
         # 时间循环
         for t in range(n_steps):
-            # 合并静态参数和当前时间步的动态参数
-            current_params = {}
+            P_t = P[t]
+            T_t = T[t]
+            PET_t = PET[t]
+            doy_t = doy[t]
 
-            # 添加静态参数
-            for name in self.static_param_names:
-                current_params[name] = static_params[name]
+            # 准备当前时间步的气象强迫 [n_grid, 3]
+            forcings_t = torch.stack([P_t[:, 0], T_t[:, 0], PET_t[:, 0]], dim=-1)
 
-            # 添加动态参数（当前时间步）
-            for name in self.dynamic_param_names:
-                current_params[name] = dynamic_params[name][t]  # [n_grid, nmul]
+            # 准备MLP输入：[n_grid, 5]
+            state_vector = torch.stack([S1[:, 0], S2[:, 0], Sc1[:, 0], Sc2[:, 0], Sn[:, 0]], dim=-1)
 
-            # 调用 mopex_step_static
-            Q, ET, S1_new, S2_new, Sc1_new, Sc2_new, Sn_new = (
-                self.mopex_step_compiled(
-                    P=P[t],
-                    T=T[t],
-                    PET=PET[t],
-                    doy=doy[t],
-                    Sb1=current_params["Sb1"],
-                    tw=current_params["tw"],
-                    tu=current_params["tu"],
-                    Se=current_params["Se"],
-                    tc=current_params["tc"],
-                    ddf=current_params["ddf"],
-                    tcrit=current_params["tcrit"],
-                    Sb2=current_params["Sb2"],
-                    alpha=current_params["alpha"],
-                    is_time=current_params["is_time"],
-                    tmin=current_params["tmin"],
-                    tmax=current_params["tmax"],
-                    S1=states["S1"],
-                    S2=states["S2"],
-                    Sc1=states["Sc1"],
-                    Sc2=states["Sc2"],
-                    Sn=states["Sn"],
-                    nearzero=self.nearzero,
-                )
+            # MLP前向传播（已编译）
+            weights_logits = self.weight_mlp_gate(state_vector, forcings_t, static_attrs)
+
+            # 应用gumbel_softmax或softmax
+            weights_logits_clipped = torch.clamp(weights_logits, min=-10.0, max=10.0)
+            if self.training:
+                weights_probs = F.gumbel_softmax(weights_logits_clipped, tau=1.0, hard=False, dim=-1)
+            else:
+                weights_probs = F.softmax(weights_logits_clipped, dim=-1)
+
+            weights_t = weights_probs[..., 1]  # [n_grid, 4]
+
+            # 优化：使用 unsqueeze + expand 代替 repeat
+            if self.nmul == 1:
+                w_phen_t = weights_t[:, 0:1]
+                w_int_t = weights_t[:, 1:2]
+                w_snow_t = weights_t[:, 2:3]
+                w_sub_t = weights_t[:, 3:4]
+            else:
+                w_phen_t = weights_t[:, 0].unsqueeze(-1).expand(-1, self.nmul)
+                w_int_t = weights_t[:, 1].unsqueeze(-1).expand(-1, self.nmul)
+                w_snow_t = weights_t[:, 2].unsqueeze(-1).expand(-1, self.nmul)
+                w_sub_t = weights_t[:, 3].unsqueeze(-1).expand(-1, self.nmul)
+
+            # 获取当前时间步的动态参数
+            if has_dynamic:
+                ddf_t = ddf_all[t]
+                alpha_t = alpha_all[t]
+                Sb2_t = Sb2_all[t]
+                Se_t = Se_all[t]
+            else:
+                ddf_t = ddf_static
+                alpha_t = alpha_static
+                Sb2_t = Sb2_static
+                Se_t = Se_static
+
+            # 调用编译后的 mopex_step
+            Q, ET, S1, S2, Sc1, Sc2, Sn = self.mopex_step_compiled(
+                P_t, T_t, PET_t, doy_t,
+                w_phen_t, w_int_t, w_snow_t, w_sub_t,
+                Sb1, tw, tu, Se_t, tc, ddf_t, tcrit, Sb2_t, alpha_t, is_time, tmin, tmax,
+                S1, S2, Sc1, Sc2, Sn,
+                self.nearzero,
             )
 
-            # 保存输出
             Q_out[t] = Q
             ET_out[t] = ET
+            weights_out[t] = weights_t
 
-            # 更新状态
-            states["S1"] = S1_new
-            states["S2"] = S2_new
-            states["Sc1"] = Sc1_new
-            states["Sc2"] = Sc2_new
-            states["Sn"] = Sn_new
-
-        return Q_out, ET_out
+        return Q_out, ET_out, weights_out
 
     def forward(
-        self, x: torch.Tensor, x_dict: Dict[str, torch.Tensor]
+        self,
+        x_dict: Dict[str, torch.Tensor],
+        parameters: Dict[str, torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
         """
         前向传播
 
         Args:
-            x: 输入张量 [n_steps, n_grid, n_features]
-            x_dict: 包含额外信息的字典
-                - "target": 目标值
-                - "doy": 日序
-                - "parameters": 参数字典（从MultiHeadNetParam输出）
+            x_dict: 包含以下键的字典
+                - 'x_phy': [n_steps, n_grid, n_vars] 动态气象数据
+                - 'c_nn_norm': [n_grid, static_size] 静态属性
+                - 'doy': [n_steps, n_grid] 日序
+                - 'target': [n_steps, n_grid, 1] 目标值
+            parameters: MultiHeadNetParam输出的字典
+                       {"static_params": tensor, "dynamic_params": tensor, "gamma_uh": tensor}
 
         Returns:
-            result: 包含预测结果的字典
+            包含'streamflow'等输出的字典
         """
-        n_steps, n_grid, _ = x.shape
+        x = x_dict["x_phy"]
+        n_steps, n_grid = x.shape[:2]
 
-        # 解包参数
-        static_params, dynamic_params, routing_params = self.unpack_parameters(
-            x_dict["parameters"]
-        )
+        if not self.warm_up_states:
+            self.pred_cutoff = self.warm_up
+
+        # 解包参数（静态 + 动态）
+        static_params_dict, dynamic_params_raw, routing_raw = self.unpack_parameters(parameters)
 
         # 反归一化静态参数
-        self.static_param_dict = self._descale_params(
-            static_params, self.static_param_names, self.MOPEX_PARAMS_BOUNDS
-        )
+        static_param_names = ["Sb1", "tw", "tu", "tc", "tcrit", "is_time", "tmin", "tmax"]
+        mopex_params_static = {}
+        for name in static_param_names:
+            param_raw = static_params_dict[name].unsqueeze(1)  # [B, 1, nmul]
+            param_descaled = change_param_range(
+                param_raw,
+                self.MOPEX_PARAMS_BOUNDS[name],
+            ).squeeze(1)  # [B, nmul]
+            mopex_params_static[name] = param_descaled
 
         # 反归一化动态参数
-        # dynamic_params: [n_steps, B, 4, nmul]
-        dynamic_params_descaled = {}
-        for i, name in enumerate(self.dynamic_param_names):
-            # 提取第i个参数: [n_steps, B, nmul]
-            param_values = dynamic_params[:, :, i, :]
-            # 转置到 [n_steps, B, nmul] -> [B, n_steps, nmul] -> 反归一化 -> [n_steps, B, nmul]
-            param_values_transposed = param_values.permute(1, 0, 2)  # [B, n_steps, nmul]
-            param_descaled = change_param_range(
-                param_values_transposed, self.MOPEX_PARAMS_BOUNDS[name]
-            )
-            dynamic_params_descaled[name] = param_descaled.permute(1, 0, 2)  # [n_steps, B, nmul]
+        dynamic_param_names = ["ddf", "alpha", "Sb2", "Se"]
+        mopex_params_dynamic = {}
+        if dynamic_params_raw is not None:
+            # dynamic_params_raw: [n_steps, B, 4*nmul]
+            n_steps_param = dynamic_params_raw.shape[0]
+            dynamic_params_reshaped = dynamic_params_raw.view(
+                n_steps_param, n_grid, len(dynamic_param_names), self.nmul
+            )  # [n_steps, B, 4, nmul]
 
-        # 反归一化路由参数
-        self.routing_param_dict = self._descale_routing_params(routing_params)
+            for i, name in enumerate(dynamic_param_names):
+                param_raw = dynamic_params_reshaped[:, :, i, :]  # [n_steps, B, nmul]
+                # 对每个时间步进行反归一化
+                param_descaled = change_param_range(
+                    param_raw,
+                    self.MOPEX_PARAMS_BOUNDS[name],
+                )
+                mopex_params_dynamic[name] = param_descaled  # [n_steps, B, nmul]
 
-        # 准备输入
+        self.routing_param_dict = self._descale_routing_params(routing_raw)
+
+        # 提取静态属性（如果存在）
+        static_attrs = None
+        if "c_nn_norm" in x_dict and self.static_size > 0:
+            static_attrs = x_dict["c_nn_norm"]  # [n_grid, static_size]
+
+        # 准备驱动数据
         P = (
             x[:, :, self.variables.index("prcp")]
             .unsqueeze(2)
@@ -325,9 +505,9 @@ class DiffMopexV1(nn.Module):
         )
         doy = x_dict["doy"].repeat(1, 1, self.nmul)
 
-        # MOPEX 时间循环
-        Q_mopex, ET_mopex = self._mopex_timestep_loop(
-            P, T, PET, doy, self.static_param_dict, dynamic_params_descaled, n_steps, n_grid
+        # MOPEX 时间循环（使用MLP Gate动态权重 + 静态/动态参数）
+        Q_mopex, ET_mopex, weights_dynamic = self._mopex_timestep_loop(
+            P, T, PET, doy, mopex_params_static, mopex_params_dynamic, static_attrs, n_steps, n_grid
         )
 
         # 平均 nmul 维度
@@ -343,11 +523,10 @@ class DiffMopexV1(nn.Module):
             "target": x_dict["target"],
         }
 
-        # 保存动态参数用于分析
-        for param_name in self.dynamic_param_names:
-            # dynamic_params_descaled[param_name] 形状: [n_steps, n_grid, nmul]
-            # 转换为 [n_steps, nmul, n_grid] 以匹配输出格式
-            result[param_name] = dynamic_params_descaled[param_name].permute(0, 2, 1)
+        # save weights - 权重现在是时变的 [n_steps, n_grid, 4]
+        # 转换为 [n_steps, n_grid, 1] 格式以便保存
+        for i, weight_name in enumerate(self.weight_names):
+            result[weight_name] = weights_dynamic[:, :, i].unsqueeze(-1)
 
         # 截断warmup
         if not self.warm_up_states:
