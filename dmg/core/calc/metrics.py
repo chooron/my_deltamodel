@@ -409,8 +409,11 @@ class Metrics(BaseModel):
         target: NDArray[np.float32],
         offset: float = 0.0,
     ) -> np.float32:
-        """Calculate percent bias."""
-        return np.sum(pred - target) / (np.sum(target) + offset) * 100
+        """Calculate percent bias with dynamic offset to avoid extreme values."""
+        target_sum = np.sum(target)
+        # Use dynamic offset: max of 1% of target sum or provided offset
+        eps_dyn = max(0.01 * abs(target_sum), offset) if offset > 0 else 0.0
+        return np.sum(pred - target) / (target_sum + eps_dyn) * 100
 
     @staticmethod
     def _pbias_abs(
@@ -418,8 +421,11 @@ class Metrics(BaseModel):
         target: NDArray[np.float32],
         offset: float = 0.0,
     ) -> np.float32:
-        """Calculate absolute percent bias."""
-        return np.sum(abs(pred - target)) / (np.sum(target) + offset) * 100
+        """Calculate absolute percent bias with dynamic offset to avoid extreme values."""
+        target_sum = np.sum(target)
+        # Use dynamic offset: max of 1% of target sum or provided offset
+        eps_dyn = max(0.01 * abs(target_sum), offset) if offset > 0 else 0.0
+        return np.sum(abs(pred - target)) / (target_sum + eps_dyn) * 100
 
     @staticmethod
     def _rmse(

@@ -9,7 +9,8 @@
       "Bash(ls:*)",
       "Bash(python:*)",
       "Bash(python3:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(chmod +x /workspace/my_deltamodel/project/flex_mopex/run_alpha_experiments.sh)"
     ]
   }
 }

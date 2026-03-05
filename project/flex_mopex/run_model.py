@@ -26,7 +26,7 @@ def update_yaml_with_alpha(config_path: str, alpha: float) -> None:
         config_yaml = yaml.safe_load(f)
 
     config_yaml['loss_function']['aic_alpha'] = alpha
-    config_yaml['save_path'] = f'project/flex_mopex/output/alpha_{alpha:g}'
+    config_yaml['save_path'] = f'project/flex_mopex/output/flex_mopex_v1/alpha_{alpha:g}'
     config_yaml['trained_model'] = f"{config_yaml['save_path']}/model/"
 
     with open(config_path, 'w', encoding='utf-8') as f:
@@ -54,7 +54,7 @@ trainer = trainer_cls(
     verbose=True
 )
 
-trainer.train()
+# trainer.train()
 print(f"Training complete. Model saved to \n{config['model_path']}")
 
 # model evaluation

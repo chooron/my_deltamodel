@@ -5,12 +5,12 @@ import os
 from pathlib import Path
 
 # Paths for weight arrays
-alpha = "0"
+alpha = "0.001"
 base_data_path = Path(
-    "/workspace/my_deltamodel/project/flex_mopex/output/camels_671/"
+    f"/workspace/my_deltamodel/project/flex_mopex/output/flex_mopex_v1/alpha_{alpha}/camels_671/"
     "train1980-1995/no_multi/"
-    "MultiHeadNet_E50_R365_B100_n16_noLn_noWU_42/"
-    f"FlexMopexV1/alpha_{alpha}/NseAicBatchLoss/stat"
+    "MultiHeadNet_E50_R365_B100_n4_noLn_noWU_42/"
+    "FlexMopexV1/NseAicBatchLoss/stat"
 )
 data_range = "test1995-2010_Ep50"
 
@@ -119,8 +119,10 @@ for name in weights_per_type.keys():
     cbar = plt.colorbar(scatter, ax=ax, fraction=0.035, pad=0.04, aspect=18)
     cbar.set_label("Weight", fontsize=11)
 
-    output_path = os.path.join(output_dir, f"{alpha}", f"{name}_map.png")
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    output_path = os.path.join(output_dir, f"{alpha}")
+    if not os.path.exists(output_path):
+        os.mkdir(output_path)
+    plt.savefig(os.path.join(output_path, f"{name}_map.png"), dpi=300, bbox_inches="tight")
     print(f"Saved: {output_path}")
     plt.close(fig)
 
