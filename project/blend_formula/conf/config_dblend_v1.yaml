@@ -13,8 +13,8 @@ data_loader: HydroLoader
 data_sampler: HydroSampler
 trainer: Trainer
 save_output: true
-save_path: project/flex_mopex/output
-trained_model: project/flex_mopex/output/model/
+save_path: project/blend_formula/output
+# trained_model: project/blend_formula/output/model/
 
 ## Training ------------------------------#
 train:
@@ -48,16 +48,15 @@ simulation:
 
 ## Loss Function -------------------------#
 loss_function:
-  model: NseDynAicBatchLoss
-  aic_alpha: 0.0
+  model: NseBatchLoss
 
 ## Differentiable Model -----------------------------#
 delta_model:
   rho: 365
 
   phy_model:
-    directory: project\flex_mopex\models
-    model: [FlexMopexV2]
+    directory: project\blend_formula\models
+    model: [DiffBlendV2]
     nmul: 16
     warm_up: 365
     warm_up_states: False
@@ -66,14 +65,13 @@ delta_model:
     use_log_norm: []
     nearzero: 1e-5
     forcings: [prcp, tmean, pet]
+    weight_method: gumbel_softmax
 
   nn_model:
-    directory: project\flex_mopex\models
-    model: MultiHeadNetDyn
-    dr: 0.5
+    directory: project\blend_formula\models
+    model: MultiHeadNet
+    dr: 0.2
     hidden_size: 128
-    lstm_hidden_size: 128
-    lstm_num_layers: 128
 
     forcings: [prcp, tmean, pet]
     attributes:

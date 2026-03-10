@@ -38,6 +38,7 @@ class Metrics(BaseModel):
     corr_spearman: NDArray[np.float32] = np.ndarray([])
     r2: NDArray[np.float32] = np.ndarray([])
     nse: NDArray[np.float32] = np.ndarray([])
+    nse_positive_ratio: float = 0.0
 
     flv: NDArray[np.float32] = np.ndarray([])
     fhv: NDArray[np.float32] = np.ndarray([])
@@ -244,6 +245,14 @@ class Metrics(BaseModel):
                         if wants('r2'):
                             self.r2[i] = r2_val
 
+        # Calculate NSE positive ratio (percentage of NSE > 0)
+        if wants('nse') and self.nse.size > 0:
+            valid_nse = self.nse[~np.isnan(self.nse)]
+            if valid_nse.size > 0:
+                self.nse_positive_ratio = float(np.sum(valid_nse > 0) / valid_nse.size * 100)
+            else:
+                self.nse_positive_ratio = 0.0
+
         return super().model_post_init(__context)
 
     @model_validator(mode='after')
@@ -287,10 +296,26 @@ class Metrics(BaseModel):
         # Calculate statistics
         for key, value in model_dict.items():
             if isinstance(value, np.ndarray) and value.size > 0:
+                # Special handling for NSE: clip negative values to 0 before calculating stats
+                if key == 'nse':
+                    value_clipped = np.maximum(value, 0.0)
+                    stats[key] = {
+                        'median': float(np.nanmedian(value_clipped)),
+                        'mean': float(np.nanmean(value_clipped)),
+                        'std': float(np.nanstd(value_clipped)),
+                    }
+                else:
+                    stats[key] = {
+                        'median': float(np.nanmedian(value)),
+                        'mean': float(np.nanmean(value)),
+                        'std': float(np.nanstd(value)),
+                    }
+            elif key == 'nse_positive_ratio':
+                # Include the nse_positive_ratio scalar value
                 stats[key] = {
-                    'median': float(np.nanmedian(value)),
-                    'mean': float(np.nanmean(value)),
-                    'std': float(np.nanstd(value)),
+                    'median': float(value),
+                    'mean': float(value),
+                    'std': 0.0,
                 }
         return stats
 

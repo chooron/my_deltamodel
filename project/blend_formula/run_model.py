@@ -12,11 +12,11 @@ from dmg.core.utils import (  # noqa: E402
     import_trainer,
     set_randomseed,
 )
-from project.flex_mopex import load_config  # noqa: E402
+from project.blend_formula import load_config  # noqa: E402
 
 #------------------------------------------#
 # Define model settings here. 3555MiB
-CONFIG_PATH = r'conf/config_fmopex_v1.yaml'
+CONFIG_PATH = r'conf/config_dblend_v1.yaml'
 #------------------------------------------#
 # model training
 config = load_config(CONFIG_PATH)
@@ -33,12 +33,12 @@ trainer = trainer_cls(
     verbose=True
 )
 
-trainer.train()
+# trainer.train()
 print(f"Training complete. Model saved to \n{config['model_path']}")
 
 # model evaluation
 config['mode'] = 'test'
-config['test']['test_epoch'] = 50
+config['test']['test_epoch'] = 20
 set_randomseed(config['random_seed'])
 
 model = ModelHandler(config, verbose=True)
