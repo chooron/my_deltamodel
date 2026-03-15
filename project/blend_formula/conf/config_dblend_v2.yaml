@@ -1,44 +1,57 @@
 defaults:
   - _self_
   - hydra: settings
-  - observations: camels_671 # camels_531, camels_671
+  - observations: camels_671
 
 ## General -------------------------------#
-mode: train # train, test, train_test, simulation
+mode: train
 random_seed: 42
 device: cuda
 gpu_id: 0
 
 data_loader: HydroLoader
 data_sampler: HydroSampler
-trainer: Trainer
+trainer: TwoStageTrainer
 save_output: true
 save_path: project/blend_formula/output
-# trained_model: project/blend_formula/output/model/
 
 ## Training ------------------------------#
 train:
   start_time: 1980/10/01
   end_time: 1995/09/30
   target: [streamflow]
-  optimizer: Adadelta
+  optimizer: Adam
   batch_size: 100
-  epochs: 50
+  epochs: 30  # stage1(50) + stage2(80)
   start_epoch: 0
   save_epoch: 5
-  learning_rate: 1.0
+  learning_rate: 1e-3
   loss_kwargs_mode: model_output
   lr_scheduler: None
   lr_scheduler_params:
     step_size: 10
     gamma: 0.5
 
+## Two-Stage Training Config -------------#
+two_stage:
+  verbose: true
+  stage1_epochs: 10
+  stage2_epochs: 20
+  stage1_lr: 1e-3
+  stage2_param_lr: 1e-5
+  stage2_weight_lr: 1e-3
+  tau_start: 5.0
+  tau_end: 0.3
+  stage2_warmup_epochs: 20
+  balance_loss_weight: 0.01
+  log_interval: 5
+
 ## Evaluation -------------------------------#
 test:
   start_time: 1995/10/01
   end_time: 2010/09/30
   batch_size: 100
-  test_epoch: 50
+  test_epoch: 30
   split_dataset: True
 
 ## Inference -------------------------------#
@@ -50,7 +63,7 @@ simulation:
 ## Loss Function -------------------------#
 loss_function:
   model: KgeBalanceLoss
-  hybrid_weights: [1.0, 0.1]  # KGE权重=1.0, Balance权重=0.1
+  hybrid_weights: [1.0, 0.01]
   eps: 1e-5
 
 ## Differentiable Model -----------------------------#
@@ -58,8 +71,8 @@ delta_model:
   rho: 365
 
   phy_model:
-    directory: project\blend_formula\models
-    model: [DiffBlendV1]
+    directory: project/blend_formula/models
+    model: [DiffBlendV2]
     nmul: 4
     warm_up: 365
     warm_up_states: False
@@ -71,8 +84,8 @@ delta_model:
     weight_method: gumbel_softmax
 
   nn_model:
-    directory: project\blend_formula\models
-    model: MultiHeadNet
+    directory: project/blend_formula/models
+    model: MultiHeadNetV2
     dr: 0.2
     hidden_size: 256
 

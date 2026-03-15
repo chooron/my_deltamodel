@@ -15,26 +15,11 @@ from project.deal_hydro import load_config  # noqa: E402
 
 # ------------------------------------------#
 # Define model settings here.
-CONFIG_PATH = r"conf/config_unify_ann.yaml"
+CONFIG_PATH = r"conf/config_unify_annv2.yaml"
 # ------------------------------------------#
-# model training
-config = load_config(CONFIG_PATH)
-config["mode"] = "train"
-set_randomseed(config["random_seed"])
-model = ModelHandler(config, verbose=True)
-data_loader_cls = import_data_loader(config["data_loader"])
-data_loader = data_loader_cls(config, test_split=True, overwrite=False)
-trainer_cls = import_trainer(config["trainer"])
-trainer = trainer_cls(
-    config, model, train_dataset=data_loader.train_dataset, verbose=True
-)
-
-trainer.train()
-print(f"Training complete. Model saved to {config['model_path']}")
-
-# model evaluation
 
 # Load configuration
+config = load_config(CONFIG_PATH)
 config["mode"] = "test"
 config["test"]["test_epoch"] = 100
 set_randomseed(config["random_seed"])

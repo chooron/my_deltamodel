@@ -296,31 +296,32 @@ class ModelHandler(torch.nn.Module):
             raise ValueError("No loss function defined.")
         loss_func = loss_func or self.loss_func
         loss_combined = 0.0
+
+        # 获取损失函数的 kwargs 模式配置
+        loss_kwargs_mode = self.config.get("train", {}).get("loss_kwargs_mode", "model_output")
+
         # Loss calculation for each model
         for name, output in self.output_dict.items():
-            have_weights = "w_int" in output.keys()
-            # if self.target_name not in output.keys():
-            #     raise ValueError(f"Target variable '{self.target_name}' not in model outputs.")
             pred = output[self.target_name].squeeze()
             target = dataset_dict["target"].squeeze()
             if len(pred.shape) < 2:
                 pred = pred.unsqueeze(0)
             if len(target.shape) < 2:
                 target = target.unsqueeze(0)
-            if have_weights:
-                weights = {k: output[k] for k in ["w_phen", "w_int", "w_snow", "w_sub"]}
-                loss = loss_func(
-                    pred,
-                    target,
-                    sample_ids=dataset_dict["batch_sample"],
-                    weights=weights,
-                )
-            else:
-                loss = loss_func(
-                    pred,
-                    target,
-                    sample_ids=dataset_dict["batch_sample"],
-                )
+
+            # 构建 loss 函数的 kwargs
+            loss_kwargs = {"sample_ids": dataset_dict["batch_sample"]}
+
+            if loss_kwargs_mode == "weights":
+                # 传递 weights 参数（用于特定的损失函数）
+                if "w_int" in output.keys():
+                    weights = {k: output[k] for k in ["w_phen", "w_int", "w_snow", "w_sub"]}
+                    loss_kwargs["weights"] = weights
+            elif loss_kwargs_mode == "model_output":
+                # 传递完整的 model_output（用于 BalanceSmoothLoss, KgeBalanceLoss 等）
+                loss_kwargs["model_output"] = output
+
+            loss = loss_func(pred, target, **loss_kwargs)
             loss_combined += loss
             self.loss_dict[name] += loss.item()
 

@@ -10,7 +10,17 @@
       "Bash(python:*)",
       "Bash(python3:*)",
       "Bash(cat:*)",
-      "Bash(chmod +x /workspace/my_deltamodel/project/flex_mopex/run_alpha_experiments.sh)"
+      "Bash(chmod +x /workspace/my_deltamodel/project/flex_mopex/run_alpha_experiments.sh)",
+      "Bash(uv run:*)",
+      "Bash(tee /tmp/training_output.log)",
+      "Bash(/workspace/my_deltamodel/.venv/bin/python debug_shape.py)",
+      "Bash(/workspace/my_deltamodel/.venv/bin/python ../../debug_shape.py)",
+      "Bash(/workspace/my_deltamodel/.venv/bin/python /workspace/my_deltamodel/project/deal_hydro/run_models.py)",
+      "Bash(/tmp/tbptt_removal_summary.txt:*)",
+      "Read(//tmp/**)",
+      "Bash(/workspace/my_deltamodel/.venv/bin/python run_mc_dropout_eval.py)",
+      "Bash(pkill -f run_mc_dropout_eval.py)",
+      "Bash(wc -l /workspace/my_deltamodel/dmg/models/phy_models/core/*.py)"
     ]
   }
 }

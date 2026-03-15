@@ -7,6 +7,8 @@ from .nse_sqrt_batch_loss import NseSqrtBatchLoss
 from .range_bound_loss import RangeBoundLoss
 from .rmse_comb_loss import RmseCombLoss
 from .rmse_loss import RmseLoss
+from .balance_smooth_loss import BalanceSmoothLoss
+from .kge_balance_loss import KgeBalanceLoss
 
 __all__ = [
     'BaseCriterion',
@@ -18,4 +20,6 @@ __all__ = [
     'RmseCombLoss',
     'RmseLoss',
     'RangeBoundLoss',
+    'BalanceSmoothLoss',
+    'KgeBalanceLoss',
 ]

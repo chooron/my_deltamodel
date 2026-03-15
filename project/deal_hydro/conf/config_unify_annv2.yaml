@@ -58,7 +58,7 @@ delta_model:
     - tmean
     - pet
     model:
-    - UnifyV1
+    - UnifyV3
     model_name: hbv96
     nearzero: 1e-6
     nmul: 1
@@ -72,7 +72,7 @@ loss_function:
   model: KgeBatchLoss
 mode: train
 random_seed: 42
-save_path: project/deal_hydro/output
+save_path: project/deal_hydro/outputv2
 simulation:
   batch_size: 25
   end_time: 2014/09/30
@@ -83,6 +83,9 @@ test:
   split_dataset: false
   start_time: 1999/01/01
   test_epoch: 100
+  metrics:
+    - kge
+    - nse
 train:
   batch_size: 100
   end_time: 1998/12/31
@@ -98,5 +101,4 @@ train:
   start_time: 1989/01/01
   target:
   - streamflow
-trained_model: project/deal_hydro/output/model/
-trainer: DealTrainer
+trainer: FasterTrainer

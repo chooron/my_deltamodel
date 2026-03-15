@@ -16,7 +16,7 @@ from project.blend_formula import load_config  # noqa: E402
 
 #------------------------------------------#
 # Define model settings here. 3555MiB
-CONFIG_PATH = r'conf/config_dblend_v1.yaml'
+CONFIG_PATH = r'conf/config_dblend_v2.yaml'
 #------------------------------------------#
 # model training
 config = load_config(CONFIG_PATH)
@@ -38,7 +38,6 @@ print(f"Training complete. Model saved to \n{config['model_path']}")
 
 # model evaluation
 config['mode'] = 'test'
-config['test']['test_epoch'] = 20
 set_randomseed(config['random_seed'])
 
 model = ModelHandler(config, verbose=True)
