@@ -1,5 +1,5 @@
 import torch
-from typing import Dict, Tuple, Optional, Any, List
+from typing import Dict, Tuple, Optional, Any
 
 from dmg.models.phy_models.unify_v1 import UnifyV1
 from dmg.models.phy_models.core.mopex5 import mopex5_step, create_initial_state
@@ -28,20 +28,21 @@ class Mopex5(UnifyV1):
         super().__init__(config, device, backend)
         self.model_step = _maybe_compile(mopex5_step, self.backend)
 
-    def _init_states(self, n_grid: int) -> Tuple[torch.Tensor, ...]:
+    def _init_states(self, n_grid: int, nmul: int = None) -> Tuple[torch.Tensor, ...]:
         # States: S1, S2, Sc1, Sc2, Sn
-        return create_initial_state(n_grid, self.nmul, self.device, self.nearzero)
+        return create_initial_state(n_grid, nmul or self.nmul, self.device, self.nearzero)
 
     def _run_model(
         self,
         x_dict: dict,
         states: Tuple[torch.Tensor, ...],
         static_params: Dict[str, torch.Tensor],
+        nmul: int = None,
     ) -> Dict[str, torch.Tensor]:
         forcing = x_dict["x_phy"]
         doy_raw = x_dict["doy"]
         n_steps, n_grid = forcing.shape[:2]
-        nmul = self.nmul
+        nmul = nmul or self.nmul
         nearzero = self.nearzero
 
         # Unbind forcing
@@ -69,27 +70,6 @@ class Mopex5(UnifyV1):
         tmax = static_params["tmax"]
 
         S1, S2, Sc1, Sc2, Sn = states
-
-        track_balance = self.check_water_balance
-        if track_balance:
-            Et_out = torch.empty(
-                (n_steps, n_grid, nmul), device=self.device, dtype=torch.float32
-            )
-            state_series: Optional[List[torch.Tensor]] = [
-                torch.empty(
-                    (n_steps + 1, n_grid, nmul),
-                    device=self.device,
-                    dtype=torch.float32,
-                )
-                for _ in range(len(states))
-            ]
-            for idx, state in enumerate(states):
-                state_series[idx][0] = state
-            S_init_sum = torch.stack([s.clone() for s in states]).sum(dim=0)
-        else:
-            Et_out = None
-            state_series = None
-            S_init_sum = None
 
         q_list = []
 
@@ -119,25 +99,7 @@ class Mopex5(UnifyV1):
                 nearzero=nearzero,
             )
             q_list.append(Qsim)
-            if track_balance:
-                Et_out[t] = flux_ea
-                if state_series is not None:
-                    state_series[0][t + 1] = S1
-                    state_series[1][t + 1] = S2
-                    state_series[2][t + 1] = Sc1
-                    state_series[3][t + 1] = Sc2
-                    state_series[4][t + 1] = Sn
 
         Qsim_out = torch.stack(q_list, dim=0)
-        final_states = (S1, S2, Sc1, Sc2, Sn)
 
-        if track_balance:
-            return self._finalize_output(
-                Qsim_out,
-                Et_out,
-                S_init_sum,
-                final_states,
-                state_series,
-            )
-
-        return self._finalize_output(Qsim_out)
+        return {"streamflow": Qsim_out.flatten(start_dim=1)}

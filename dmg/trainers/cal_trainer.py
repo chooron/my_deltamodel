@@ -1,6 +1,8 @@
+import gc
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -157,12 +159,13 @@ class CalTrainer(BaseTrainer):
         torch.optim.lr_scheduler.LRScheduler
             Initialized learning rate scheduler object.
         """
-        name = self.config["delta_model"]["train"]["lr_scheduler"]
+        name = self.config["delta_model"]["nn_model"]["lr_scheduler"]
         scheduler_dict = {
             "StepLR": torch.optim.lr_scheduler.StepLR,
             "ExponentialLR": torch.optim.lr_scheduler.ExponentialLR,
             "ReduceLROnPlateau": torch.optim.lr_scheduler.ReduceLROnPlateau,
             "CosineAnnealingLR": torch.optim.lr_scheduler.CosineAnnealingLR,
+            "CosineAnnealingWarmRestarts": torch.optim.lr_scheduler.CosineAnnealingWarmRestarts,
         }
 
         # Fetch scheduler class
@@ -177,7 +180,7 @@ class CalTrainer(BaseTrainer):
         try:
             self.scheduler = cls(
                 self.optimizer,
-                **self.config["delta_model"]["train"]["lr_scheduler_params"],
+                **self.config["delta_model"]["nn_model"]["lr_scheduler_params"],
             )
         except RuntimeError as e:
             raise RuntimeError(f"Error initializing scheduler: {e}") from e
@@ -302,8 +305,14 @@ class CalTrainer(BaseTrainer):
         self.current_epoch = epoch
         self.total_loss = 0.0
 
-        # 获取 Multi-Start 倍数 (默认为1)
-        nmul = self.config["delta_model"]["phy_model"].get("nmul", 16)
+        # 获取实际的 num_start：优先从模型属性读取（自适应计算后的值），回退到 config
+        model_name = self.config["delta_model"]["phy_model"]["model"]
+        _model_name = model_name[0] if isinstance(model_name, list) else model_name
+        _nn = getattr(self.model.model_dict.get(_model_name, None), "nn_model", None)
+        if _nn is not None and hasattr(_nn, "num_start"):
+            nmul = _nn.num_start
+        else:
+            nmul = self.config["delta_model"]["phy_model"].get("nmul", 16)
 
         # Iterate through epoch in minibatches.
         for mb in tqdm.tqdm(
@@ -371,13 +380,23 @@ class CalTrainer(BaseTrainer):
 
             self.total_loss += loss.item()
 
+            # CosineAnnealingWarmRestarts 需要 per-batch step 以获得平滑余弦曲线
+            if self.use_scheduler and isinstance(
+                self.scheduler,
+                torch.optim.lr_scheduler.CosineAnnealingWarmRestarts,
+            ):
+                self.scheduler.step(epoch - 1 + mb / n_minibatch)
+
             if self.verbose:
                 if epoch % 10 == 0:
                     tqdm.tqdm.write(
                         f"Epoch {epoch}, batch {mb} | loss: {loss.item() / nmul}"
                     )
 
-        if self.use_scheduler:
+        if self.use_scheduler and not isinstance(
+            self.scheduler,
+            torch.optim.lr_scheduler.CosineAnnealingWarmRestarts,
+        ):
             self.scheduler.step()
 
         if self.verbose:
@@ -399,50 +418,93 @@ class CalTrainer(BaseTrainer):
                 clear_prior=True,
             )
 
-    def evaluate(self) -> None:
-        """Run model evaluation and return both metrics and model outputs."""
-        self.is_in_train = False
+    def _evaluate_dataset(
+        self,
+        dataset: dict,
+        out_path,
+        start_time: str,
+        end_time: str,
+    ) -> None:
+        """Evaluate a single dataset and save results to out_path.
 
-        # 1. 获取 Multi-Start 的倍数 (从配置读取, 默认为 1)
-        nmul = self.config["delta_model"]["phy_model"].get("nmul", 16)
+        Parameters
+        ----------
+        dataset
+            Dataset dictionary to evaluate.
+        out_path
+            Output directory path for saving results.
+        start_time
+            Start time string for logging.
+        end_time
+            End time string for logging.
+        """
+        model_name = self.config["delta_model"]["phy_model"]["model"]
+        _model_name = model_name[0] if isinstance(model_name, list) else model_name
+        _nn = getattr(self.model.model_dict.get(_model_name, None), "nn_model", None)
+        if _nn is not None and hasattr(_nn, "num_start"):
+            nmul = _nn.num_start
+        else:
+            nmul = self.config["delta_model"]["phy_model"].get("nmul", 16)
 
-        # Track overall predictions and observations
-        batch_predictions = []
-        observations = self.eval_dataset["target"]
-
-        # ============================================================
-        # [核心修改] 如果是 Multi-Start，把观测数据也复制扩展，跟预测数据对齐
-        # observations shape: [Batch, Time, 1] -> [Batch*nmul, Time, 1]
-        # ============================================================
+        observations = dataset["target"]
         if nmul > 1:
-            # 假设 dim=0 是 Batch 维度 (根据你之前的代码逻辑)
-            # 如果报错维度不对，请检查 observations 的 shape，可能是 dim=1
             observations = observations.repeat_interleave(nmul, dim=1)
-        # ============================================================
 
-        # Get start and end indices for each batch
-        n_samples = self.eval_dataset["xc_nn_norm"].shape[1]
+        n_samples = dataset["xc_nn_norm"].shape[1]
         batch_start = np.arange(0, n_samples, self.config["test"]["batch_size"])
         batch_end = np.append(batch_start[1:], n_samples)
 
-        # Model forward
-        # _forward_loop 内部已经在 _run_model 里做了扩展，
-        # 所以出来的 batch_predictions 已经是 [Batch*nmul, Time] 的形状了
-        log.info(f"Validating Model: Forwarding {len(batch_start)} batches")
-        batch_predictions = self._forward_loop(
-            self.eval_dataset, batch_start, batch_end
-        )
+        log.info(f"Evaluating {start_time} ~ {end_time}: {len(batch_start)} batches")
+        batch_predictions = self._forward_loop(dataset, batch_start, batch_end)
 
-        # Save predictions and calculate metrics
+        # Temporarily override out_path in config for saving
+        orig_out_path = self.config["out_path"]
+        self.config["out_path"] = out_path
+        out_path.mkdir(parents=True, exist_ok=True)
+
         log.info("Saving model outputs + Calculating metrics")
         if self.config.get("save_output", False):
             save_outputsv2(
                 self.config, batch_predictions, observations, create_dirs=True
             )
-        self.predictions = self._batch_data(batch_predictions)
-
-        # Calculate metrics
         self.calc_metrics(batch_predictions, observations)
+
+        self.config["out_path"] = orig_out_path
+
+        # Free memory after each dataset evaluation
+        del batch_predictions, observations
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def evaluate(self) -> None:
+        """Run model evaluation on both train and eval datasets."""
+        self.is_in_train = False
+
+        base_outpath = Path(self.config["out_path"]).parents[0]
+        test_epoch = self.config["test"].get("test_epoch", "")
+
+        datasets_to_eval = []
+
+        if self.train_dataset is not None:
+            train_start = self.config["train"].get("start_time", "1989/01/01")
+            train_end = self.config["train"].get("end_time", "1998/12/31")
+            # Format: train{YYYY}-{YYYY}_Ep{epoch}
+            s_year = train_start.split("/")[0]
+            e_year = train_end.split("/")[0]
+            folder = base_outpath / f"train{s_year}-{e_year}_Ep{test_epoch}"
+            datasets_to_eval.append((self.train_dataset, folder, train_start, train_end))
+
+        if self.eval_dataset is not None:
+            eval_start = self.config["test"].get("start_time", "1999/01/01")
+            eval_end = self.config["test"].get("end_time", "2009/12/31")
+            s_year = eval_start.split("/")[0]
+            e_year = eval_end.split("/")[0]
+            folder = base_outpath / f"test{s_year}-{e_year}_Ep{test_epoch}"
+            datasets_to_eval.append((self.eval_dataset, folder, eval_start, eval_end))
+
+        for dataset, out_path, start_time, end_time in datasets_to_eval:
+            self._evaluate_dataset(dataset, out_path, start_time, end_time)
+            print(f"Metrics and predictions saved to {out_path}")
 
     def inference(self) -> None:
         """Run batch model inference and save model outputs."""
@@ -584,7 +646,7 @@ class CalTrainer(BaseTrainer):
                 prediction = self.model(dataset_sample, eval=True)
                 prediction = {
                     key: tensor.cpu().detach()
-                    for key, tensor in prediction[model_name].items()
+                    for key, tensor in prediction.items()
                 }
                 batch_predictions.append(prediction)
         return batch_predictions

@@ -16,10 +16,10 @@ RESULT_PATH = (
 )
 # 输出 CSV 路径
 OUTPUT_TEST_CSV_NAME = (
-    f"{os.path.dirname(os.path.abspath(__file__))}/csv/dif_test_invkge.csv"
+    f"{os.path.dirname(os.path.abspath(__file__))}/csv/dif_test_kge.csv"
 )
 OUTPUT_TRAIN_CSV_NAME = (
-    f"{os.path.dirname(os.path.abspath(__file__))}/csv/dif_train_invkge.csv"
+    f"{os.path.dirname(os.path.abspath(__file__))}/csv/dif_train_kge.csv"
 )
 
 # 流域 ID 文件路径配置
@@ -28,8 +28,8 @@ DATA_PATH = os.getenv("DATA_PATH", ".")
 BASIN_ID_FILENAME = "559sub_id.txt"
 
 # 默认参数
-LOSS_NAME = "KgeInverseLoss"  # 读取 KgeLoss 文件夹
-METRIC_KEY = "inv_kge"  # 读取 json 中的 "kge" 键
+LOSS_NAME = "KgeLoss"  # 读取 KgeLoss 文件夹
+METRIC_KEY = "kge"  # 读取 json 中的 "kge" 键
 TRAIN_DIR = "train1989-1998"
 TEST_DIR = "test1999-2009"
 N_BASINS = 559  # 固定流域数量

@@ -1,7 +1,7 @@
 import torch
 from typing import Dict, Tuple, Optional, Any, List
 
-from dmg.models.phy_models.unify_v2 import UnifyV2
+from dmg.models.phy_models.unify_v1 import UnifyV1
 from dmg.models.phy_models.core.mopex5 import mopex5_step, create_initial_state
 
 
@@ -13,7 +13,7 @@ def _maybe_compile(fn, backend: str):
     return fn
 
 
-class Mopex5(UnifyV2):
+class Mopex5(UnifyV1):
     """Mopex5 hydrological model (phenology-aware interception, snow, two-bucket routing)."""
 
     def __init__(

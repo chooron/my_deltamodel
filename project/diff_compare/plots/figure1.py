@@ -39,7 +39,7 @@ def load_and_align_data():
 
     # Primary KGE
     path_marrmot_kge = os.path.join(csv_dir, "marrmot_test_kge.csv")
-    path_dmot_kge = os.path.join(csv_dir, "dif_test_kge.csv")
+    path_dmot_kge = os.path.join(csv_dir, "dif_test_kge2.csv")
 
     # Inverse KGE (optional)
     path_marrmot_invkge = os.path.join(csv_dir, "marrmot_test_invkge.csv")

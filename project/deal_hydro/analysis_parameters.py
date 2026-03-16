@@ -52,6 +52,25 @@ param_names = [
     "maxbas",
 ]
 
+# HBV96 参数边界（用于反缩放）
+HBV96_PARAMS_BOUNDS = {
+    "tt": [-3.0, 5.0],           # TT, threshold temperature for snowfall [oC]
+    "tti": [0.0, 17.0],          # TTI, interval length of rain-snow spectrum [oC]
+    "ttm": [-3.0, 3.0],          # TTM, threshold temperature for snowmelt [oC]
+    "cfr": [0.0, 1.0],           # CFR, coefficient of refreezing of melted snow [-]
+    "cfmax": [0.0, 20.0],        # CFMAX, degree-day factor of snowmelt and refreezing [mm/oC/d]
+    "whc": [0.0, 1.0],           # WHC, maximum water holding content of snow pack [-]
+    "cflux": [0.0, 4.0],         # CFLUX, maximum rate of capillary rise [mm/d]
+    "fc": [1.0, 2000.0],         # FC, maximum soil moisture storage [mm]
+    "lp": [0.05, 0.95],          # LP, wilting point as fraction of FC [-]
+    "beta": [0.0, 10.0],         # BETA, non-linearity coefficient of upper zone recharge [-]
+    "k0": [0.0, 1.0],            # K0, runoff coefficient from upper zone [d-1]
+    "alpha": [0.0, 4.0],         # ALPHA, non-linearity coefficient of runoff from upper zone [-]
+    "perc": [0.0, 20.0],         # PERC, maximum rate of percolation to lower zone [mm/d]
+    "k1": [0.0, 1.0],            # K1, runoff coefficient from lower zone [d-1]
+    "maxbas": [1.0, 120.0],      # MAXBAS, flow routing delay [d]
+}
+
 
 def _to_numpy(arr):
     if isinstance(arr, torch.Tensor):
@@ -59,7 +78,61 @@ def _to_numpy(arr):
     return np.asarray(arr)
 
 
-params_np = _to_numpy(pred_params)  # shape (559, 15)
+def _descale_params(params_normalized, param_names, bounds):
+    """
+    将归一化参数 [0, 1] 映射回实际物理范围
+
+    Parameters
+    ----------
+    params_normalized : np.ndarray or torch.Tensor
+        归一化参数，形状 [..., n_params] 或 [..., n_params, n_samples]
+    param_names : list
+        参数名称列表
+    bounds : dict
+        参数边界字典
+
+    Returns
+    -------
+    params_scaled : np.ndarray
+        缩放后的参数，与输入形状相同
+    """
+    is_tensor = isinstance(params_normalized, torch.Tensor)
+    if is_tensor:
+        params_normalized = _to_numpy(params_normalized)
+
+    params_scaled = np.zeros_like(params_normalized)
+
+    # 处理不同的输入形状
+    if params_normalized.ndim == 2:
+        # 形状: [n_basins, n_params]
+        for i, name in enumerate(param_names):
+            if name in bounds:
+                min_val, max_val = bounds[name]
+                params_scaled[:, i] = params_normalized[:, i] * (max_val - min_val) + min_val
+            else:
+                params_scaled[:, i] = params_normalized[:, i]
+    elif params_normalized.ndim == 3:
+        # 形状: [n_basins, n_params, n_samples]
+        for i, name in enumerate(param_names):
+            if name in bounds:
+                min_val, max_val = bounds[name]
+                params_scaled[:, i, :] = params_normalized[:, i, :] * (max_val - min_val) + min_val
+            else:
+                params_scaled[:, i, :] = params_normalized[:, i, :]
+    else:
+        raise ValueError(f"Unsupported parameter shape: {params_normalized.shape}")
+
+    return params_scaled
+
+
+# 原始归一化参数 [0, 1]
+params_normalized_np = _to_numpy(pred_params)  # shape (559, 16, 15) or (559, 15)
+
+# 反缩放到物理范围
+params_np = _descale_params(params_normalized_np, param_names, HBV96_PARAMS_BOUNDS)
+print(f"Parameters descaled to physical range: {params_np.shape}")
+print(f"  Range: [{params_np.min():.4f}, {params_np.max():.4f}]")
+
 attrs_np = _to_numpy(norm_attr)  # shape (559, 35)
 
 num_params = params_np.shape[1]
@@ -136,9 +209,14 @@ def get_geometric_medoid(params_ensemble):
 with torch.no_grad():
     # pred_params: [559, 16, 15]
     best_params_tensor = get_geometric_medoid(pred_params)
-    
-params_np = _to_numpy(best_params_tensor) # [559, 15] (这是最稳健的一组参数)
-attrs_np = _to_numpy(norm_attr)           # [559, 35]
+
+# 将选择的最佳参数也反缩放到物理范围
+best_params_np = _to_numpy(best_params_tensor)  # [559, 15] (归一化的)
+params_np = _descale_params(best_params_np, param_names, HBV96_PARAMS_BOUNDS)  # 反缩放到物理范围
+print(f"Best parameters (medoid) descaled to physical range: {params_np.shape}")
+print(f"  Range: [{params_np.min():.4f}, {params_np.max():.4f}]")
+
+attrs_np = _to_numpy(norm_attr)  # [559, 35]
 
 # ==========================================
 # 2. 深度分析：互信息 (Mutual Information) vs Pearson

@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Tuple, Optional, Any, List
 
-from dmg.models.phy_models.unify_v2 import UnifyV2
+from dmg.models.phy_models.unify_v1 import UnifyV1
 
 # 引入通量计算函数
 from dmg.models.phy_models.flux.evap import evap_12
@@ -128,7 +128,7 @@ def _maybe_compile(fn, backend: str):
 # ==============================================================================
 
 
-class Ihacres(UnifyV2):
+class Ihacres(UnifyV1):
     """
     IHACRES Hydrological Model (7 Parameters)
 

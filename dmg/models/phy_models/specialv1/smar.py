@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Tuple, Optional, Any, List
+from typing import Dict, Tuple, Optional, Any
 
 from dmg.models.phy_models.unify_v1 import UnifyV1
 
@@ -305,10 +305,11 @@ class Smar(UnifyV1):
         self.uh = DplGamma6(max_lag=int(SMAR_PARAMS_BOUNDS["nk_delay"][1]))
         self.production_step = _maybe_compile(_smar_production_step_impl, self.backend)
 
-    def _init_states(self, n_grid: int) -> Tuple[torch.Tensor, ...]:
+    def _init_states(self, n_grid: int, nmul: int = None) -> Tuple[torch.Tensor, ...]:
         # Initialize 6 states
+        nmul = nmul or self.nmul
         states = tuple(
-            torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
+            torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
             for _ in range(6)
         )
         return states
@@ -318,10 +319,11 @@ class Smar(UnifyV1):
         x_dict: dict,
         states: Tuple[torch.Tensor, ...],
         static_params: Dict[str, torch.Tensor],
+        nmul: int = None,
     ) -> Dict[str, torch.Tensor]:
         forcing = x_dict['x_phy']
         n_steps, n_grid = forcing.shape[:2]
-        nmul = self.nmul
+        nmul = nmul or self.nmul
         nearzero = self.nearzero
 
         # Unbind forcing
@@ -341,27 +343,6 @@ class Smar(UnifyV1):
         nk_delay = static_params["nk_delay"]  # nk (mean delay)
 
         S1, S2, S3, S4, S5, S6 = states
-
-        track_balance = self.check_water_balance
-        if track_balance:
-            Et_out = torch.empty(
-                (n_steps, n_grid, nmul), device=self.device, dtype=torch.float32
-            )
-            state_series: Optional[List[torch.Tensor]] = [
-                torch.empty(
-                    (n_steps + 1, n_grid, nmul),
-                    device=self.device,
-                    dtype=torch.float32,
-                )
-                for _ in range(6)
-            ]
-            for idx, state in enumerate(states):
-                state_series[idx][0] = state
-            S_init_sum = torch.stack([s.clone() for s in states]).sum(dim=0)
-        else:
-            Et_out = None
-            state_series = None
-            S_init_sum = None
 
         # ==========================================================
         # Phase 1: Production Loop
@@ -392,14 +373,6 @@ class Smar(UnifyV1):
             )
             raw_qr_list.append(flux_qr_in)
             raw_qg_list.append(flux_qg)
-            if track_balance:
-                Et_out[t] = flux_ea
-                state_series[0][t + 1] = S1
-                state_series[1][t + 1] = S2
-                state_series[2][t + 1] = S3
-                state_series[3][t + 1] = S4
-                state_series[4][t + 1] = S5
-                state_series[5][t + 1] = S6
 
         # Stack: (T, B, M)
         qr_stack = torch.stack(raw_qr_list, dim=0)
@@ -434,15 +407,5 @@ class Smar(UnifyV1):
         # ==========================================================
         # Q = Routed Surface + Baseflow
         Qsim_out = routed_qr + qg_stack
-        final_states = (S1, S2, S3, S4, S5, S6)
 
-        if track_balance:
-            return self._finalize_output(
-                Qsim_out,
-                Et_out,
-                S_init_sum,
-                final_states,
-                state_series,
-            )
-
-        return self._finalize_output(Qsim_out)
+        return {"streamflow": Qsim_out.flatten(start_dim=1)}

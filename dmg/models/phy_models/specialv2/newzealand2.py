@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Tuple, Optional, Any, List
 
-from dmg.models.phy_models.unify_v2 import UnifyV2
+from dmg.models.phy_models.unify_v1 import UnifyV1
 
 # 引入通量计算函数
 from dmg.models.phy_models.flux.evap import evap_1, evap_6, evap_5
@@ -147,7 +147,7 @@ def _maybe_compile(fn, backend: str):
 # ==============================================================================
 
 
-class Newzealand2(UnifyV2):
+class Newzealand2(UnifyV1):
     """
     New Zealand Model v2 (MARRMoT m_16)
 

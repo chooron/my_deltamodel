@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Tuple, Optional, Any, List
 
-from dmg.models.phy_models.unify_v2 import UnifyV2
+from dmg.models.phy_models.unify_v1 import UnifyV1
 
 # 引入通量计算函数
 from dmg.models.phy_models.flux.saturation import saturation_3
@@ -154,7 +154,7 @@ def _maybe_compile(fn, backend: str):
 # 3. Model Class (FlexbModel)
 # ==============================================================================
 
-class Flexb(UnifyV2):
+class Flexb(UnifyV1):
     """
     Flex-B Hydrological Model (MARRMoT m_21)
     

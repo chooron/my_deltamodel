@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Tuple, Optional, Any, List
+from typing import Dict, Tuple, Optional, Any
 
 from dmg.models.phy_models.unify_v1 import UnifyV1
 
@@ -180,11 +180,12 @@ class Flexb(UnifyV1):
         self.production_step = _maybe_compile(_flexb_production_step_impl, self.backend)
         self.routing_step = _maybe_compile(_flexb_routing_step_impl, self.backend)
 
-    def _init_states(self, n_grid: int) -> Tuple[torch.Tensor, ...]:
+    def _init_states(self, n_grid: int, nmul: int = None) -> Tuple[torch.Tensor, ...]:
         """S1: Unsaturated, S2: Fast, S3: Slow"""
-        S1 = torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
-        S2 = torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
-        S3 = torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
+        nmul = nmul or self.nmul
+        S1 = torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
+        S2 = torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
+        S3 = torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
         return (S1, S2, S3)
 
     def _run_model(
@@ -192,10 +193,11 @@ class Flexb(UnifyV1):
         x: dict,
         states: Tuple[torch.Tensor, ...],
         static_params: Dict[str, torch.Tensor],
+        nmul: int = None,
     ) -> Dict[str, torch.Tensor]:
         forcing = x['x_phy']
         n_steps, n_grid = forcing.shape[:2]
-        nmul = self.nmul
+        nmul = nmul or self.nmul
         nearzero = self.nearzero
 
         # --- A. Data Prep ---
@@ -217,28 +219,6 @@ class Flexb(UnifyV1):
 
         S1, S2, S3 = states
 
-        track_balance = self.check_water_balance
-        if track_balance:
-            Et_out = torch.empty(
-                (n_steps, n_grid, nmul), device=self.device, dtype=torch.float32
-            )
-            state_series: Optional[List[torch.Tensor]] = [
-                torch.empty(
-                    (n_steps + 1, n_grid, nmul),
-                    device=self.device,
-                    dtype=torch.float32,
-                )
-                for _ in range(3)
-            ]
-            state_series[0][0] = S1
-            state_series[1][0] = S2
-            state_series[2][0] = S3
-            S_init_sum = torch.stack([s.clone() for s in states]).sum(dim=0)
-        else:
-            Et_out = None
-            state_series = None
-            S_init_sum = None
-
         # ==========================================================
         # Phase 1: Production Loop
         # ==========================================================
@@ -254,9 +234,6 @@ class Flexb(UnifyV1):
             )
             raw_rf_list.append(flux_rf)
             raw_slow_list.append(flux_slow_in)
-            if track_balance:
-                Et_out[t] = flux_eur
-                state_series[0][t + 1] = S1
 
         # Stack: (T, B, M)
         rf_stack = torch.stack(raw_rf_list, dim=0)
@@ -295,20 +272,7 @@ class Flexb(UnifyV1):
                 nearzero
             )
             Qsim_list.append(Qsim)
-            if track_balance and state_series is not None:
-                state_series[1][t + 1] = S2
-                state_series[2][t + 1] = S3
 
         Qsim_out = torch.stack(Qsim_list, dim=0)
-        final_states = (S1, S2, S3)
 
-        if track_balance:
-            return self._finalize_output(
-                Qsim_out,
-                Et_out,
-                S_init_sum,
-                final_states,
-                state_series,
-            )
-
-        return self._finalize_output(Qsim_out)
+        return {"streamflow": Qsim_out.flatten(start_dim=1)}

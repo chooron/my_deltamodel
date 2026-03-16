@@ -238,14 +238,14 @@ def save_results_to_csv(
 def main():
     """主函数"""
     # 配置路径
-    mc_dropout_dir = "/workspace/my_deltamodel/project/deal_hydro/outputv2/camels_559/train1989-1998/no_multi/Parameterize_E100_R365_B100_n1_noLn_noWU_42/hbv96/KgeBatchLoss/stat/test1999-2009_Ep100/mc_dropout"
+    mc_dropout_dir = "/workspace/my_deltamodel/project/deal_hydro/output/camels_559/train1989-1998/no_multi/Parameterize_E100_R365_B100_n1_noLn_noWU_42/hbv96/KgeBatchLoss/stat/test1999-2009_Ep100/mc_dropout"
     csv_dir = "/workspace/my_deltamodel/project/deal_hydro/analysis/csv"
 
     # 确保输出目录存在
     os.makedirs(csv_dir, exist_ok=True)
 
     # 参数设置
-    metric_name = 'nse'  # 优化指标，可选 'nse', 'kge', 'rmse' 等
+    metric_name = 'kge'  # 优化指标，可选 'nse', 'kge', 'rmse' 等
     maximize = True  # NSE 和 KGE 越大越好
 
     # 参数名称（HBV96 模型）

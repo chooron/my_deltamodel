@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Tuple, Optional, Any, List
+from typing import Dict, Tuple, Optional, Any
 
 from dmg.models.phy_models.unify_v1 import UnifyV1
 
@@ -172,14 +172,11 @@ class Newzealand2(UnifyV1):
         self.uh = DplTri4(max_lag=int(NEWZEALAND2_PARAMS_BOUNDS["d_delay"][1]))
         self.production_step = _maybe_compile(_newzealand2_production_step_impl, self.backend)
 
-    def _init_states(self, n_grid: int) -> Tuple[torch.Tensor, ...]:
+    def _init_states(self, n_grid: int, nmul: int = None) -> Tuple[torch.Tensor, ...]:
         """S1: Interception, S2: Soil"""
-        S1 = (
-            torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
-        )
-        S2 = (
-            torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
-        )
+        nmul = nmul or self.nmul
+        S1 = torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
+        S2 = torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
         return (S1, S2)
 
     def _run_model(
@@ -187,10 +184,11 @@ class Newzealand2(UnifyV1):
         x_dict: dict,
         states: Tuple[torch.Tensor, ...],
         static_params: Dict[str, torch.Tensor],
+        nmul: int = None,
     ) -> Dict[str, torch.Tensor]:
         forcing = x_dict["x_phy"]
         n_steps, n_grid = forcing.shape[:2]
-        nmul = self.nmul
+        nmul = nmul or self.nmul
         nearzero = self.nearzero
 
         # Unbind forcing
@@ -209,27 +207,6 @@ class Newzealand2(UnifyV1):
         d_delay = static_params["d_delay"]
 
         S1, S2 = states
-
-        track_balance = self.check_water_balance
-        if track_balance:
-            Et_out = torch.empty(
-                (n_steps, n_grid, nmul), device=self.device, dtype=torch.float32
-            )
-            state_series: Optional[List[torch.Tensor]] = [
-                torch.empty(
-                    (n_steps + 1, n_grid, nmul),
-                    device=self.device,
-                    dtype=torch.float32,
-                )
-                for _ in range(2)
-            ]
-            state_series[0][0] = S1
-            state_series[1][0] = S2
-            S_init_sum = torch.stack([s.clone() for s in states]).sum(dim=0)
-        else:
-            Et_out = None
-            state_series = None
-            S_init_sum = None
 
         # ==========================================================
         # Phase 1: Production Loop
@@ -253,10 +230,6 @@ class Newzealand2(UnifyV1):
                 nearzero,
             )
             raw_q_total_list.append(flux_q_total)
-            if track_balance:
-                Et_out[t] = flux_ea
-                state_series[0][t + 1] = S1
-                state_series[1][t + 1] = S2
 
         # Stack: (T, B, M)
         q_total_stack = torch.stack(raw_q_total_list, dim=0)
@@ -276,15 +249,5 @@ class Newzealand2(UnifyV1):
 
         # 4. Reshape Final Output: (T, B, M)
         Qsim_out = routed_q_flat.view(n_grid, nmul, n_steps).permute(2, 0, 1)
-        final_states = (S1, S2)
 
-        if track_balance:
-            return self._finalize_output(
-                Qsim_out,
-                Et_out,
-                S_init_sum,
-                final_states,
-                state_series,
-            )
-
-        return self._finalize_output(Qsim_out)
+        return {"streamflow": Qsim_out.flatten(start_dim=1)}

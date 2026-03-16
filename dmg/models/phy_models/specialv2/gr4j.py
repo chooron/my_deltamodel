@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from typing import Dict, Tuple, Optional, Any, List
 
-from dmg.models.phy_models.unify_v2 import UnifyV2
+from dmg.models.phy_models.unify_v1 import UnifyV1
 from dmg.models.phy_models.unithydro.uh_half_1 import DplHalf1
 from dmg.models.phy_models.unithydro.uh_full_2 import DplFull2
 
@@ -119,7 +119,7 @@ def _maybe_compile(fn, backend: str):
     return fn
 
 
-class Gr4j(UnifyV2):
+class Gr4j(UnifyV1):
     def __init__(
         self,
         config: Optional[Dict[str, Any]] = None,

@@ -1,7 +1,14 @@
+import numpy as np
 import torch
 import torch.nn as nn
 from typing import Union
-from scipy.stats import qmc  # 需要安装 scipy: pip install scipy
+from scipy.stats import qmc
+
+def compute_nmul(ny: int, multiplier: int = 20) -> int:
+    """根据参数数量动态计算成员数，向上取最近的2的幂次"""
+    raw = max(multiplier * ny, 32)
+    return int(2 ** np.ceil(np.log2(raw)))
+
 
 class Calibrate(torch.nn.Module):
     def __init__(
@@ -32,28 +39,27 @@ class Calibrate(torch.nn.Module):
         Shape: (num_basins, ny, num_start)
         """
         if strategy == "lhs_logit":
-            # --- 方案 A (最推荐): LHS + Logit ---
-            # 1. 使用拉丁超立方生成 [0, 1] 样本
-            # d=ny (参数维度)
+            # --- 方案 A (最推荐): 每个流域独立 LHS + Logit ---
+            # 每个流域单独采样，保证每个流域的 num_start 个成员均匀覆盖 [0,1]^ny
             sampler = qmc.LatinHypercube(d=self.ny)
-            
-            # 我们需要为 (所有流域 * 所有起点) 生成样本
-            total_samples = self.num_basins * self.num_start
-            sample_np = sampler.random(n=total_samples)
-            
-            # 2. 转为 Tensor 并移动到 GPU
-            u = torch.from_numpy(sample_np).float().to(self.device)
-            
-            # 3. Reshape: [Total, ny] -> [num_basins, num_start, ny] -> [num_basins, ny, num_start]
-            u = u.view(self.num_basins, self.num_start, self.ny).transpose(1, 2)
-            
-            # 4. 边界保护 (防止 Logit 溢出)
+            basin_samples = []
+            for _ in range(self.num_basins):
+                # shape: (num_start, ny)
+                s = sampler.random(n=self.num_start)
+                basin_samples.append(s)
+            # stack: (num_basins, num_start, ny)
+            sample_np = np.stack(basin_samples, axis=0)
+
+            # 转为 Tensor: (num_basins, num_start, ny) -> (num_basins, ny, num_start)
+            u = torch.from_numpy(sample_np).float().to(self.device).transpose(1, 2)
+
+            # 边界保护 (防止 Logit 溢出)
             u = u * 0.9 + 0.05
-            
-            # 5. Logit 变换 (Inverse Sigmoid)
+
+            # Logit 变换 (Inverse Sigmoid)
             init_val = torch.log(u / (1 - u))
-            
-            print(f"[Calibrate] Initialized with Latin Hypercube Sampling (LHS) + Logit.")
+
+            print(f"[Calibrate] Initialized with per-basin Latin Hypercube Sampling (LHS) + Logit With {self.num_start} Starts.")
             return nn.Parameter(init_val)
 
         elif strategy == "uniform":
@@ -84,12 +90,16 @@ class Calibrate(torch.nn.Module):
         # 获取初始化策略，默认为 lhs_logit
         init_strat = config.get("init_strategy", "lhs_logit")
         
+        ny = config["ny"]
+        nmul_cfg = config.get("nmul", 16)
+        num_start = compute_nmul(ny, multiplier=nmul_cfg)
+
         return cls(
             nx=config["nx2"],
-            ny=config["ny"],
-            num_basins=n_basins, 
-            num_start=config["nmul"],
-            init_strategy=init_strat, # 传入策略
+            ny=ny,
+            num_basins=n_basins,
+            num_start=num_start,
+            init_strategy=init_strat,
             device=device,
         )
 

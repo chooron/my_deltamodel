@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from typing import Dict, Tuple, Optional, Any, List
+from typing import Dict, Tuple, Optional, Any
 
 from dmg.models.phy_models.unify_v1 import UnifyV1
 from dmg.models.phy_models.unithydro.uh_half_1 import DplHalf1
@@ -138,9 +138,10 @@ class Gr4j(UnifyV1):
         self.production_step = _maybe_compile(_gr4j_production_step_impl, self.backend)
         self.routing_step = _maybe_compile(_gr4j_routing_step_impl, self.backend)
 
-    def _init_states(self, n_grid: int) -> Tuple[torch.Tensor, ...]:
-        S1 = torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
-        S2 = torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
+    def _init_states(self, n_grid: int, nmul: int = None) -> Tuple[torch.Tensor, ...]:
+        nmul = nmul or self.nmul
+        S1 = torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
+        S2 = torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
         return (S1, S2)
 
     def _run_model(
@@ -148,10 +149,11 @@ class Gr4j(UnifyV1):
         x_dict: dict,
         states: Tuple[torch.Tensor, ...],
         static_params: Dict[str, torch.Tensor],
+        nmul: int = None,
     ) -> Dict[str, torch.Tensor]:
         forcing = x_dict["x_phy"]
         n_steps, n_grid = forcing.shape[:2]
-        nmul = self.nmul
+        nmul = nmul or self.nmul
         nearzero = self.nearzero
 
         P_seq = forcing[..., 0:1].expand(-1, -1, nmul).unbind(0)
@@ -165,21 +167,6 @@ class Gr4j(UnifyV1):
 
         S1, S2 = states
 
-        track_balance = self.check_water_balance
-        Et_out: Optional[torch.Tensor] = None
-        state_series: Optional[List[torch.Tensor]] = None
-        S_init_sum: Optional[torch.Tensor] = None
-
-        if track_balance:
-            Et_out = torch.empty((n_steps, n_grid, nmul), device=self.device)
-            state_series = [
-                torch.empty((n_steps + 1, n_grid, nmul), device=self.device)
-                for _ in range(2)
-            ]
-            state_series[0][0] = S1
-            state_series[1][0] = S2
-            S_init_sum = torch.stack([s.clone() for s in states]).sum(dim=0)
-
         flux_pr_list = []
         e_phys_list = []
         for t in range(n_steps):
@@ -188,8 +175,6 @@ class Gr4j(UnifyV1):
             )
             flux_pr_list.append(flux_pr)
             e_phys_list.append(e_phys)
-            if track_balance and state_series is not None:
-                state_series[0][t + 1] = S1
 
         flux_pr_stack = torch.stack(flux_pr_list, dim=0)
         e_phys_stack = torch.stack(e_phys_list, dim=0)
@@ -221,20 +206,7 @@ class Gr4j(UnifyV1):
                 q9_seq[t], q1_seq[t], S2, x2, x3, e_phys_seq[t], nearzero
             )
             Qsim_list.append(q_total)
-            if track_balance and state_series is not None and Et_out is not None:
-                Et_out[t] = ea_balanced
-                state_series[1][t + 1] = S2
 
         Qsim_out = torch.stack(Qsim_list, dim=0)
-        final_states = (S1, S2)
 
-        if track_balance:
-            return self._finalize_output(
-                Qsim_out,
-                Et_out,
-                S_init_sum,
-                final_states,
-                state_series,
-            )
-
-        return self._finalize_output(Qsim_out)
+        return {"streamflow": Qsim_out.flatten(start_dim=1)}

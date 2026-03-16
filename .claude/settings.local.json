@@ -20,7 +20,11 @@
       "Read(//tmp/**)",
       "Bash(/workspace/my_deltamodel/.venv/bin/python run_mc_dropout_eval.py)",
       "Bash(pkill -f run_mc_dropout_eval.py)",
-      "Bash(wc -l /workspace/my_deltamodel/dmg/models/phy_models/core/*.py)"
+      "Bash(wc -l /workspace/my_deltamodel/dmg/models/phy_models/core/*.py)",
+      "Bash(chmod +x /workspace/my_deltamodel/project/diff_compare/run_calibrations_kge_parallel.sh)",
+      "Bash(chmod +x /workspace/my_deltamodel/project/diff_compare/run_calibrations_invkge_parallel.sh)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(grep -n \"def _init_states\\\\|def _run_model\\\\|nmul = self.nmul\\\\|self.nmul\\)\" /workspace/my_deltamodel/dmg/models/phy_models/specialv1/*.py)"
     ]
   }
 }

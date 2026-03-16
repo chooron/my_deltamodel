@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Tuple, Optional, Any, List
 
-from dmg.models.phy_models.unify_v2 import UnifyV2
+from dmg.models.phy_models.unify_v1 import UnifyV1
 
 # 引入通量计算函数
 from dmg.models.phy_models.flux.interception import interception_1
@@ -170,7 +170,7 @@ def _maybe_compile(fn, backend: str):
 # ==============================================================================
 
 
-class Flexi(UnifyV2):
+class Flexi(UnifyV1):
     """
     Flex-I Hydrological Model
 

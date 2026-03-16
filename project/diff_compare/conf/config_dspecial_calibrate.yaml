@@ -52,7 +52,7 @@ delta_model:
     model: Calibrate
   phy_model:
     attributes: []
-    directory: /workspace/my_deltamodel/dmg/models/phy_models/specialv2
+    directory: /workspace/my_deltamodel/dmg/models/phy_models/specialv1
     dy_drop: 0.0
     forcings:
     - prcp
@@ -61,7 +61,7 @@ delta_model:
     model:
     - Gr4j
     nearzero: 1e-6
-    nmul: 128
+    nmul: 20
     use_log_norm: []
     warm_up: 365
     warm_up_states: false
@@ -81,9 +81,7 @@ test:
   batch_size: 100
   end_time: 2009/12/31
   metrics:
-  - nse
   - kge
-  - inv_kge
   split_dataset: false
   start_time: 1999/01/01
   test_epoch: 100
