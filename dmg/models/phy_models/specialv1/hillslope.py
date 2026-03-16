@@ -246,4 +246,5 @@ class Hillslope(UnifyV1):
         # Total Q = Routed Surface Runoff + Baseflow
         Qsim_out = routed_qses + qhgw_stack
 
-        return {"streamflow": Qsim_out.flatten(start_dim=1)}
+        warm_up = min(self.warm_up, n_steps)
+        return {"streamflow": Qsim_out[warm_up:].flatten(start_dim=1)}

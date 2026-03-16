@@ -258,4 +258,5 @@ class Plateau(UnifyV1):
         # Q = Routed Surface + Baseflow
         Qsim_out = routed_pie + qpgw_stack
 
-        return {"streamflow": Qsim_out.flatten(start_dim=1)}
+        warm_up = min(self.warm_up, n_steps)
+        return {"streamflow": Qsim_out[warm_up:].flatten(start_dim=1)}

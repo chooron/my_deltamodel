@@ -250,4 +250,5 @@ class Newzealand2(UnifyV1):
         # 4. Reshape Final Output: (T, B, M)
         Qsim_out = routed_q_flat.view(n_grid, nmul, n_steps).permute(2, 0, 1)
 
-        return {"streamflow": Qsim_out.flatten(start_dim=1)}
+        warm_up = min(self.warm_up, n_steps)
+        return {"streamflow": Qsim_out[warm_up:].flatten(start_dim=1)}
