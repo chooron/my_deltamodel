@@ -700,7 +700,7 @@ class CalTrainer(BaseTrainer):
         start_time: float,
     ) -> None:
         """每个 epoch 结束时输出一行简洁日志，频率由 log_interval 控制。"""
-        log_interval = self.config["train"].get("log_interval", 10)
+        log_interval = self.config["train"].get("log_interval", 1)  # 默认每个epoch都打印
         if epoch % log_interval != 0:
             return
 
