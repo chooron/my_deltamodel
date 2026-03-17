@@ -17,13 +17,19 @@ class EliteCalTrainer(CalTrainer):
     """
 
     def _get_nmul(self) -> int:
-        """从模型或配置中读取 nmul。"""
+        """从模型中读取实际的 num_start（成员数）。"""
         model_name = self.config["delta_model"]["phy_model"]["model"]
         _model_name = model_name[0] if isinstance(model_name, list) else model_name
-        _nn = getattr(self.model.model_dict.get(_model_name, None), "nn_model", None)
-        if _nn is not None and hasattr(_nn, "num_start"):
-            return _nn.num_start
-        return self.config["delta_model"]["phy_model"].get("nmul", 16)
+        _dpl_model = self.model.model_dict.get(_model_name, None)
+        if _dpl_model is not None:
+            _nn = getattr(_dpl_model, "nn_model", None)
+            if _nn is not None and hasattr(_nn, "num_start"):
+                return _nn.num_start
+        # 如果无法从模型获取，抛出异常而不是使用配置值
+        raise RuntimeError(
+            f"无法从模型 {_model_name} 中获取 num_start。"
+            "请确保模型已正确初始化且 nn_model 具有 num_start 属性。"
+        )
 
     def _compute_member_kge(self) -> np.ndarray:
         """
@@ -146,9 +152,14 @@ class EliteCalTrainer(CalTrainer):
         """
         n_basins, nmul = kge_matrix.shape
 
+        # 获取 Calibrate 模块的 params
+        model_name = self.config["delta_model"]["phy_model"]["model"]
+        _model_name = model_name[0] if isinstance(model_name, list) else model_name
+        _dpl_model = self.model.model_dict.get(_model_name)
+        params = _dpl_model.nn_model.params  # 访问 Calibrate 的 logit 域参数
+
         # 自适应噪声尺度：根据参数 ny 维度计算
         # params shape: (n_basins, ny, nmul)
-        params = self.model.params  # 直接访问 logit 域参数
         ny = params.shape[1]
         noise_scale = 0.1 / np.sqrt(ny)
 
