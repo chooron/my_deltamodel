@@ -253,6 +253,13 @@ class CalTrainer(BaseTrainer):
         self.model.load_model(epoch=int(test_epoch))
         print(f"Loaded test checkpoint: {checkpoint_path}")
 
+    def _emit_progress(self, message: str) -> None:
+        """Emit progress even when the entry script does not configure logging."""
+        if log.hasHandlers() and log.isEnabledFor(logging.INFO):
+            log.info(message)
+        else:
+            print(message, flush=True)
+
     def train(self) -> None:
         """Train the model."""
         self.is_in_train = True
@@ -276,7 +283,7 @@ class CalTrainer(BaseTrainer):
         optimizer_name = self.config["train"]["optimizer"]
         lr = self.config["train"]["learning_rate"]
         scheduler_name = self.config["delta_model"]["nn_model"].get("lr_scheduler", "None")
-        log.info(
+        self._emit_progress(
             f"[Train Start] epochs={self.epochs} | optimizer={optimizer_name} | lr={lr} | "
             f"scheduler={scheduler_name} | n_basins={n_basins} | nmul={nmul}"
         )
@@ -286,7 +293,7 @@ class CalTrainer(BaseTrainer):
         self._train_start_time = time.perf_counter()
         self._final_loss = 0.0
 
-        log.info(
+        self._emit_progress(
             f"Training model: Beginning {self.start_epoch} of {self.epochs} epochs"
         )
         sys.stdout.flush()
@@ -303,7 +310,7 @@ class CalTrainer(BaseTrainer):
 
         # 训练结束摘要
         total_time = time.perf_counter() - self._train_start_time
-        log.info(
+        self._emit_progress(
             f"[Train End] total_time={total_time:.1f}s | best_epoch=N/A | final_loss={self._final_loss:.4f}"
         )
         sys.stdout.flush()
@@ -330,6 +337,7 @@ class CalTrainer(BaseTrainer):
 
         self.current_epoch = epoch
         self.total_loss = 0.0
+        self.model.loss_dict = {key: 0.0 for key in self.model.loss_dict}
 
         # 获取实际的 num_start：优先从模型属性读取（自适应计算后的值），回退到 config
         model_name = self.config["delta_model"]["phy_model"]["model"]
@@ -714,13 +722,16 @@ class CalTrainer(BaseTrainer):
         # 当前学习率
         lr = self.optimizer.param_groups[0]["lr"]
 
-        # 平均 loss（取第一个 loss key）
-        avg_loss = sum(loss_dict.values()) / max(n_minibatch, 1)
+        # 优先使用当前 epoch 内部累计的平均 loss，避免读取跨 epoch 累积值。
+        avg_loss = self._final_loss
 
         elapsed = time.perf_counter() - start_time
-        mem_mb = int(
-            torch.cuda.memory_reserved(device=self.config["device"]) * 0.000001
-        )
+        if torch.cuda.is_available() and str(self.config["device"]).startswith("cuda"):
+            mem_mb = int(
+                torch.cuda.memory_reserved(device=self.config["device"]) * 0.000001
+            )
+        else:
+            mem_mb = 0
 
         # 检测 Warm Restart（CosineAnnealingWarmRestarts 周期结束）
         warm_restart_tag = ""
@@ -738,7 +749,7 @@ class CalTrainer(BaseTrainer):
                     break
                 t += T_0 * (T_mult ** (t // T_0))
 
-        log.info(
+        self._emit_progress(
             f"[Epoch {epoch:>4}/{self.epochs}] loss={avg_loss:.4f} | "
             f"lr={lr:.2e} | time={elapsed:.1f}s | mem={mem_mb}MB{warm_restart_tag}"
         )

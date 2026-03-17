@@ -13,7 +13,7 @@ if [ -f "$UV_VENV/bin/activate" ]; then
 fi
 
 : "${PYTHON:=python3}"
-MAX_PARALLEL=6
+MAX_PARALLEL=1
 
 # 按参数量分4组，避免同时跑大参数模型导致OOM
 # 每次从各组各取1个模型并行，保证4个槽内存压力均衡
@@ -72,9 +72,8 @@ run_model() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始率定: $model"
     mkdir -p "$SCRIPT_DIR/logs"
 
-    "$PYTHON" "$SCRIPT_DIR/calibrate_common_parallel.py" \
-        --model "$model" \
-        > "$SCRIPT_DIR/logs/${model}_common.log" 2>&1
+    "$PYTHON" -u "$SCRIPT_DIR/calibrate_common_parallel.py" \
+        --model "$model" 2>&1 | tee "$SCRIPT_DIR/logs/${model}_common.log"
 
     if [ $? -eq 0 ]; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✓ 完成: $model"

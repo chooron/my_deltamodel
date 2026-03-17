@@ -255,11 +255,11 @@ class EliteCalTrainer(CalTrainer):
             threshold_ratio = self.config["train"].get("elite_threshold_ratio", 0.25)
             elite_ratio = self.config["train"].get("elite_ratio", 0.10)
 
-            log.info(f"[Epoch {epoch}] 开始精英变异评估...")
+            self._emit_progress(f"[Epoch {epoch}] 开始精英变异评估...")
             kge_matrix = self._compute_member_kge()
             stats = self._reset_poor_members(kge_matrix, threshold_ratio, elite_ratio)
 
-            log.info(
+            self._emit_progress(
                 f"[Epoch {epoch:>4}/{self.epochs}] 精英变异 | "
                 f"计划重置={stats['n_reset_total']} | 实际重置={stats['n_actually_reset']} | "
                 f"跳过（收敛中）={stats['n_reset_total'] - stats['n_actually_reset']} | "

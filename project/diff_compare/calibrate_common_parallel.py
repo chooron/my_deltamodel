@@ -7,6 +7,7 @@
 """
 
 import argparse
+import logging
 import sys
 import yaml
 from pathlib import Path
@@ -32,6 +33,8 @@ def parse_args():
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     args = parse_args()
     model_name = args.model
 
@@ -65,7 +68,7 @@ def main():
     print(f"配置文件: {CONF_FILE.name}")
     print(f"损失函数: {loss_name}")
     print(f"输出路径: {config['save_path']}")
-    print(f"{'='*60}\n")
+    print(f"{'='*60}\n", flush=True)
 
     # 训练
     config["mode"] = "train"
@@ -78,7 +81,7 @@ def main():
         config, model, train_dataset=data_loader.train_dataset, verbose=True
     )
     trainer.train()
-    print(f"Training complete. Model saved to {config['model_path']}")
+    print(f"Training complete. Model saved to {config['model_path']}", flush=True)
 
     # 评估
     config["mode"] = "test"
@@ -99,7 +102,7 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"模型 {model_name} 率定完成!")
-    print(f"{'='*60}\n")
+    print(f"{'='*60}\n", flush=True)
 
 
 if __name__ == "__main__":
