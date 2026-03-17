@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+import sys
 import numpy as np
 import torch
 from numpy.typing import NDArray
@@ -279,6 +280,8 @@ class CalTrainer(BaseTrainer):
             f"[Train Start] epochs={self.epochs} | optimizer={optimizer_name} | lr={lr} | "
             f"scheduler={scheduler_name} | n_basins={n_basins} | nmul={nmul}"
         )
+        sys.stdout.flush()
+        sys.stderr.flush()
 
         self._train_start_time = time.perf_counter()
         self._final_loss = 0.0
@@ -286,6 +289,8 @@ class CalTrainer(BaseTrainer):
         log.info(
             f"Training model: Beginning {self.start_epoch} of {self.epochs} epochs"
         )
+        sys.stdout.flush()
+        sys.stderr.flush()
 
         # Training loop
         for epoch in range(self.start_epoch, self.epochs + 1):
@@ -301,6 +306,8 @@ class CalTrainer(BaseTrainer):
         log.info(
             f"[Train End] total_time={total_time:.1f}s | best_epoch=N/A | final_loss={self._final_loss:.4f}"
         )
+        sys.stdout.flush()
+        sys.stderr.flush()
 
     def train_one_epoch(
         self, epoch, n_samples, n_minibatch, n_timesteps
@@ -735,3 +742,6 @@ class CalTrainer(BaseTrainer):
             f"[Epoch {epoch:>4}/{self.epochs}] loss={avg_loss:.4f} | "
             f"lr={lr:.2e} | time={elapsed:.1f}s | mem={mem_mb}MB{warm_restart_tag}"
         )
+        # 强制刷新输出到文件
+        sys.stdout.flush()
+        sys.stderr.flush()
