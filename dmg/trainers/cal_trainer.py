@@ -336,12 +336,15 @@ class CalTrainer(BaseTrainer):
             nmul = self.config["delta_model"]["phy_model"].get("nmul", 16)
 
         # Iterate through epoch in minibatches.
+        # 检测是否在交互式终端，如果不是则禁用进度条
+        disable_tqdm = not sys.stderr.isatty()
         for mb in tqdm.tqdm(
             range(1, n_minibatch + 1),
             desc=prog_str,
             leave=False,
             dynamic_ncols=True,
             file=sys.stderr,
+            disable=disable_tqdm,
         ):
             self.current_batch = mb
 
@@ -408,10 +411,8 @@ class CalTrainer(BaseTrainer):
             ):
                 self.scheduler.step(epoch - 1 + mb / n_minibatch)
 
-            if self.verbose:
-                log.debug(
-                    f"Epoch {epoch}, batch {mb} | loss: {loss.item() / nmul}"
-                )
+            # 移除了 per-batch 的 verbose 日志输出，避免日志冗余
+            # 统计信息已由 _log_epoch_stats 每 log_interval 个 epoch 输出一次
 
         if self.use_scheduler and not isinstance(
             self.scheduler,
@@ -419,10 +420,8 @@ class CalTrainer(BaseTrainer):
         ):
             self.scheduler.step()
 
-        if self.verbose:
-            log.debug(
-                f"\n ---- \n Epoch {epoch} total loss: {self.total_loss / (nmul)}"
-            )
+        # 移除了 per-epoch 的 verbose 日志输出，避免日志冗余
+        # 统计信息已由 _log_epoch_stats 每 log_interval 个 epoch 输出一次
 
         # 记录 final_loss 供 Train End 摘要使用
         self._final_loss = self.total_loss / max(n_minibatch, 1) / nmul
@@ -613,12 +612,15 @@ class CalTrainer(BaseTrainer):
         batch_predictions = []
         # Save the batch predictions
         model_name = self.config["delta_model"]["phy_model"]["model"][0]
+        # 检测是否在交互式终端，如果不是则禁用进度条
+        disable_tqdm = not sys.stderr.isatty()
         for i in tqdm.tqdm(
             range(len(batch_start)),
             desc="Forwarding",
             leave=False,
             dynamic_ncols=True,
             file=sys.stderr,
+            disable=disable_tqdm,
         ):
             self.current_batch = i
 
