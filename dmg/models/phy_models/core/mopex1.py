@@ -53,18 +53,19 @@ def saturation_1(P: torch.Tensor, S: torch.Tensor, Smax: torch.Tensor) -> torch.
     """Calculate saturation excess flow (Overflow)."""
     return F.relu((S + P) - Smax)
 
-def evap_7(S: torch.Tensor, Smax: torch.Tensor, Ep: torch.Tensor, dt: float = 1.0) -> torch.Tensor:
-    """Calculate potential evaporation based on relative storage."""
-    ratio = S / (Smax + 1e-6)
-    return Ep * ratio * dt
+def recharge_3(k: torch.Tensor, S: torch.Tensor, nearzero: float = 1e-6) -> torch.Tensor:
+    return S / (k + nearzero)
 
-def recharge_3(k: torch.Tensor, S: torch.Tensor) -> torch.Tensor:
-    """Calculate potential linear recharge/infiltration (k is time constant)."""
-    return S / (k + 1e-6)
+def baseflow_1(k: torch.Tensor, S: torch.Tensor, nearzero: float = 1e-6) -> torch.Tensor:
+    return S / (k + nearzero)
 
-def baseflow_1(k: torch.Tensor, S: torch.Tensor) -> torch.Tensor:
-    """Calculate potential linear baseflow/routing release."""
-    return S / (k + 1e-6)
+def evap_7(S, Smax, Ep, dt=1.0, nearzero=1e-6):
+    """
+    ✅ 修复：加入 max=1.0 限制，确保蒸发比例不会超过 100%，
+    防止 S > Smax 时算出比潜在蒸发量 (Ep) 还大的实际蒸发量。
+    """
+    evap_ratio = torch.clamp(S / (Smax + nearzero), max=1.0)
+    return Ep * evap_ratio * dt
 
 # ================================================================
 # 3. Main Model Step Function
@@ -72,14 +73,13 @@ def baseflow_1(k: torch.Tensor, S: torch.Tensor) -> torch.Tensor:
 
 def mopex1_step(
     P: torch.Tensor,
-    T: torch.Tensor,
+    T: torch.Tensor,        # 保留原接口，即未使用也放置于此
     PET: torch.Tensor,
-    Sb1: torch.Tensor, # s1max
-    tw: torch.Tensor,  # tw
-    tu: torch.Tensor,  # tu
-    Se: torch.Tensor,  # se
-    tc: torch.Tensor,  # tc
-    # States
+    Sb1: torch.Tensor,      # 保留原接口命名，对应 s1max
+    tw: torch.Tensor,
+    tu: torch.Tensor,
+    Se: torch.Tensor,       # 保留原接口命名，对应 se
+    tc: torch.Tensor,
     S1: torch.Tensor,
     S2: torch.Tensor,
     Sc1: torch.Tensor,
@@ -87,92 +87,72 @@ def mopex1_step(
     delta_t: float = 1.0,
     nearzero: float = 1e-6,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    
-    # --- Safety Guards ---
-    S1 = F.relu(S1)
-    S2 = F.relu(S2)
+
+    # ── Guards ───────────────────────────────────────────────────
+    # 保证每步计算前水库不为负值
+    S1  = F.relu(S1)
+    S2  = F.relu(S2)
     Sc1 = F.relu(Sc1)
     Sc2 = F.relu(Sc2)
-    
+
     # ==========================================
     # 1. Bucket 1 (Surface Soil)
-    # 逻辑：参考 HBV，一步一更新
+    # 顺序：溢流 → 蒸发 → 下渗（Ye et al. 2012）
     # ==========================================
-    
-    # [Step 1] 加雨 & 算溢流 (Saturation Excess)
-    # HBV逻辑: excess = SM - FC
-    flux_q1f = saturation_1(P, S1, Sb1)
-    
-    # 立即更新 S1：先把雨加进去，把溢流减掉
-    # 此时 S1 含有了 P 中没流走的部分
-    S1 = S1 + P - flux_q1f
-    
-    # [Step 2] 算下渗 (Recharge)
-    # 这里的 S1 已经是扣除溢流后的状态
-    flux_qw_pot = recharge_3(tw, S1)
-    # 强制约束：不能超过当前水量 (参考 HBV: min)
-    flux_qw = torch.minimum(flux_qw_pot, S1)
-    
-    # 立即更新 S1
-    S1 = S1 - flux_qw
-    
-    # [Step 3] 算蒸发 (Evaporation)
-    # 这里的 S1 已经是扣除溢流和下渗后的状态 (吃剩下的)
-    flux_et1_pot = evap_7(S1, Sb1, PET, delta_t)
-    # 强制约束
-    flux_et1 = torch.minimum(flux_et1_pot, S1)
-    
-    # 立即更新 S1 (这是最终的 S1_new)
-    S1_new = torch.clamp(S1 - flux_et1, min=0.0)
+
+    # Step 1：加雨，计算饱和溢流
+    flux_q1f = F.relu((S1 + P) - Sb1)
+    S1 = S1 + P - flux_q1f                          # 更新后 S1 ≤ Sb1
+
+    # Step 2：蒸发（优先于下渗）
+    # evap_7 已内含 clamp(max=1)，保障 flux_et1_pot <= PET
+    flux_et1_pot = evap_7(S1, Sb1, PET, delta_t, nearzero)
+    flux_et1     = torch.minimum(flux_et1_pot, S1)
+    S1           = S1 - flux_et1
+
+    # Step 3：下渗到 S2 
+    # ✅ 修复：替换为解析解(指数衰减)，避免前向欧拉造成的梯度截断，且天然保证不超抽水库
+    flux_qw = S1 * (1.0 - torch.exp(-delta_t / (tw + nearzero)))
+    S1_new  = S1 - flux_qw
 
     # ==========================================
     # 2. Bucket 2 (Subsurface)
-    # 逻辑：一步一更新
     # ==========================================
-    
-    # [Step 1] 接收水分
+
     S2 = S2 + flux_qw
-    
-    # [Step 2] 算基流 (Baseflow)
-    flux_q2u_pot = baseflow_1(tu, S2)
-    flux_q2u = torch.minimum(flux_q2u_pot, S2)
-    
-    # 立即更新 S2
-    S2 = S2 - flux_q2u
-    
-    # [Step 3] 算蒸发 (Evaporation from S2)
-    flux_et2_pot = evap_7(S2, Se, PET, delta_t)
-    flux_et2 = torch.minimum(flux_et2_pot, S2)
-    
-    # 立即更新 S2
-    S2_new = torch.clamp(S2 - flux_et2, min=0.0)
+
+    # 基流
+    # ✅ 修复：替换为解析解(指数衰减)，保证在全参数空间连续可导
+    flux_q2u = S2 * (1.0 - torch.exp(-delta_t / (tu + nearzero)))
+    S2       = S2 - flux_q2u
+
+    # ✅ 修复(原有)：S2 只能消耗 ET1 剩余的 PET；
+    # 且因为 evap_7 内部增加了限制，不用担心 S2 溢出 Se 时带来的能量不守恒
+    remaining_pet = F.relu(PET - flux_et1)
+    flux_et2_pot  = evap_7(S2, Se, remaining_pet, delta_t, nearzero)
+    flux_et2      = torch.minimum(flux_et2_pot, S2)
+    S2_new        = S2 - flux_et2
 
     # ==========================================
-    # 3. Routing (Fast & Slow)
-    # 逻辑：一步一更新
+    # 3. Routing
     # ==========================================
-    
-    # --- Fast Flow Routing ---
-    Sc1 = Sc1 + flux_q1f
-    
-    flux_qf_pot = baseflow_1(tc, Sc1)
-    flux_qf = torch.minimum(flux_qf_pot, Sc1)
-    
-    Sc1_new = torch.clamp(Sc1 - flux_qf, min=0.0)
-    
-    # --- Slow Flow Routing ---
-    Sc2 = Sc2 + flux_q2u
-    
-    flux_qs_pot = baseflow_1(tc, Sc2)
-    flux_qs = torch.minimum(flux_qs_pot, Sc2)
-    
-    Sc2_new = torch.clamp(Sc2 - flux_qs, min=0.0)
+
+    # 快速流（地表溢流）
+    Sc1      = Sc1 + flux_q1f
+    # ✅ 修复：替换为解析解(指数衰减)，天然保证 flux_qf <= Sc1，连续可导
+    flux_qf  = Sc1 * (1.0 - torch.exp(-delta_t / (tc + nearzero)))
+    Sc1_new  = Sc1 - flux_qf
+
+    # 慢速流（基流）
+    Sc2      = Sc2 + flux_q2u
+    # ✅ 修复：替换为解析解(指数衰减)
+    flux_qs  = Sc2 * (1.0 - torch.exp(-delta_t / (tc + nearzero)))
+    Sc2_new  = Sc2 - flux_qs
 
     # ==========================================
-    # 4. Returns
+    # 4. Output
     # ==========================================
-    
-    Q_total = flux_qf + flux_qs
+    Q_total  = flux_qf + flux_qs
     ET_total = flux_et1 + flux_et2
-    
+
     return Q_total, ET_total, S1_new, S2_new, Sc1_new, Sc2_new

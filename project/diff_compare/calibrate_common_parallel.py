@@ -22,7 +22,7 @@ from dmg.core.utils import (  # noqa: E402
     set_randomseed,
 )
 
-CONF_FILE = project_root / "project/diff_compare/conf/config_dcommon_calibrate.yaml"
+CONF_FILE = project_root / "project/diff_compare/conf/config_elite_common_calibrate.yaml"
 
 
 def parse_args():
@@ -80,26 +80,26 @@ def main():
     trainer.train()
     print(f"Training complete. Model saved to {config['model_path']}")
 
-    # # 评估
-    # config["mode"] = "test"
-    # config["test"]["test_epoch"] = 100
-    # set_randomseed(config["random_seed"])
-    # model = ModelHandler(config, verbose=True)
-    # data_loader_cls = import_data_loader(config["data_loader"])
-    # data_loader = data_loader_cls(config, test_split=True, overwrite=False)
-    # trainer_cls = import_trainer(config["trainer"])
-    # trainer = trainer_cls(
-    #     config,
-    #     model,
-    #     train_dataset=data_loader.train_dataset,
-    #     eval_dataset=data_loader.eval_dataset,
-    #     verbose=True,
-    # )
-    # trainer.evaluate()
+    # 评估
+    config["mode"] = "test"
+    config["test"]["test_epoch"] = 100
+    set_randomseed(config["random_seed"])
+    model = ModelHandler(config, verbose=True)
+    data_loader_cls = import_data_loader(config["data_loader"])
+    data_loader = data_loader_cls(config, test_split=True, overwrite=False)
+    trainer_cls = import_trainer(config["trainer"])
+    trainer = trainer_cls(
+        config,
+        model,
+        train_dataset=data_loader.train_dataset,
+        eval_dataset=data_loader.eval_dataset,
+        verbose=True,
+    )
+    trainer.evaluate()
 
-    # print(f"\n{'='*60}")
-    # print(f"模型 {model_name} 率定完成!")
-    # print(f"{'='*60}\n")
+    print(f"\n{'='*60}")
+    print(f"模型 {model_name} 率定完成!")
+    print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":

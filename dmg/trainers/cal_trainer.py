@@ -1,6 +1,7 @@
 import gc
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -88,7 +89,7 @@ class CalTrainer(BaseTrainer):
             if not self.train_dataset:
                 raise ValueError("'train_dataset' required for training mode.")
 
-            log.info("Initializing experiment")
+            log.debug("Initializing experiment")
             self.epochs = self.config["train"]["epochs"]
 
             # Loss function
@@ -199,7 +200,7 @@ class CalTrainer(BaseTrainer):
                 # log.info("Loading trainer states --> Resuming Training from" /
                 #          f" epoch {self.start_epoch}")
 
-                checkpoint = torch.load(os.path.join(path, file))
+                checkpoint = torch.load(os.path.join(path, file), map_location=self.config["device"])
 
                 # Restore optimizer states
                 self.optimizer.load_state_dict(
@@ -215,15 +216,15 @@ class CalTrainer(BaseTrainer):
                     )
 
                 # Restore random states
-                torch.set_rng_state(checkpoint["random_state"])
+                torch.set_rng_state(checkpoint["random_state"].cpu().byte())
                 if (
                     torch.cuda.is_available()
                     and "cuda_random_state" in checkpoint
                 ):
                     torch.cuda.set_rng_state_all(
-                        checkpoint["cuda_random_state"]
+                        checkpoint["cuda_random_state"].cpu().byte()
                     )
-                print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
+                log.debug(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
                 return
             else:
                 self.start_epoch = 1
@@ -270,6 +271,20 @@ class CalTrainer(BaseTrainer):
                 self.config,
             )
 
+        # 训练开始摘要
+        nmul = self._get_nmul() if hasattr(self, "_get_nmul") else self.config["delta_model"]["phy_model"].get("nmul", 16)
+        n_basins = self.train_dataset["xc_nn_norm"].shape[1]
+        optimizer_name = self.config["train"]["optimizer"]
+        lr = self.config["train"]["learning_rate"]
+        scheduler_name = self.config["delta_model"]["nn_model"].get("lr_scheduler", "None")
+        log.info(
+            f"[Train Start] epochs={self.epochs} | optimizer={optimizer_name} | lr={lr} | "
+            f"scheduler={scheduler_name} | n_basins={n_basins} | nmul={nmul}"
+        )
+
+        self._train_start_time = time.perf_counter()
+        self._final_loss = 0.0
+
         log.info(
             f"Training model: Beginning {self.start_epoch} of {self.epochs} epochs"
         )
@@ -282,6 +297,12 @@ class CalTrainer(BaseTrainer):
                 n_minibatch,
                 n_timesteps,
             )
+
+        # 训练结束摘要
+        total_time = time.perf_counter() - self._train_start_time
+        log.info(
+            f"[Train End] total_time={total_time:.1f}s | best_epoch=N/A | final_loss={self._final_loss:.4f}"
+        )
 
     def train_one_epoch(
         self, epoch, n_samples, n_minibatch, n_timesteps
@@ -320,6 +341,7 @@ class CalTrainer(BaseTrainer):
             desc=prog_str,
             leave=False,
             dynamic_ncols=True,
+            file=sys.stderr,
         ):
             self.current_batch = mb
 
@@ -348,10 +370,9 @@ class CalTrainer(BaseTrainer):
             # [修改 1] Loss NaN 保护：跳过当前 Batch 而不是报错
             # ============================================================
             if torch.isnan(loss) or torch.isinf(loss):
-                if self.verbose:
-                    tqdm.tqdm.write(
-                        f"[Warning] Batch {mb}: Loss is NaN/Inf. Skipping this batch."
-                    )
+                log.debug(
+                    f"[Warning] Batch {mb}: Loss is NaN/Inf. Skipping this batch."
+                )
                 self.optimizer.zero_grad()
                 continue  # 直接跳过，不进行 backward，保护模型不崩
 
@@ -388,10 +409,9 @@ class CalTrainer(BaseTrainer):
                 self.scheduler.step(epoch - 1 + mb / n_minibatch)
 
             if self.verbose:
-                if epoch % 10 == 0:
-                    tqdm.tqdm.write(
-                        f"Epoch {epoch}, batch {mb} | loss: {loss.item() / nmul}"
-                    )
+                log.debug(
+                    f"Epoch {epoch}, batch {mb} | loss: {loss.item() / nmul}"
+                )
 
         if self.use_scheduler and not isinstance(
             self.scheduler,
@@ -400,9 +420,13 @@ class CalTrainer(BaseTrainer):
             self.scheduler.step()
 
         if self.verbose:
-            log.info(
+            log.debug(
                 f"\n ---- \n Epoch {epoch} total loss: {self.total_loss / (nmul)}"
             )
+
+        # 记录 final_loss 供 Train End 摘要使用
+        self._final_loss = self.total_loss / max(n_minibatch, 1) / nmul
+
         self._log_epoch_stats(
             epoch, self.model.loss_dict, n_minibatch, start_time
         )
@@ -594,6 +618,7 @@ class CalTrainer(BaseTrainer):
             desc="Forwarding",
             leave=False,
             dynamic_ncols=True,
+            file=sys.stderr,
         ):
             self.current_batch = i
 
@@ -690,31 +715,39 @@ class CalTrainer(BaseTrainer):
         n_minibatch: int,
         start_time: float,
     ) -> None:
-        """Log statistics after each epoch.
+        """每个 epoch 结束时输出一行简洁日志，频率由 log_interval 控制。"""
+        log_interval = self.config["train"].get("log_interval", 10)
+        if epoch % log_interval != 0:
+            return
 
-        Parameters
-        ----------
-        epoch
-            Current epoch number.
-        loss_dict
-            Dictionary containing loss values.
-        n_minibatch
-            Number of minibatches.
-        start_time
-            Start time of the epoch.
-        """
-        avg_loss_dict = {
-            key: value / n_minibatch + 1 for key, value in loss_dict.items()
-        }
-        loss = ", ".join(
-            f"{key}: {value:.6f}" for key, value in avg_loss_dict.items()
-        )
+        # 当前学习率
+        lr = self.optimizer.param_groups[0]["lr"]
+
+        # 平均 loss（取第一个 loss key）
+        avg_loss = sum(loss_dict.values()) / max(n_minibatch, 1)
+
         elapsed = time.perf_counter() - start_time
-        mem_aloc = int(
+        mem_mb = int(
             torch.cuda.memory_reserved(device=self.config["device"]) * 0.000001
         )
 
+        # 检测 Warm Restart（CosineAnnealingWarmRestarts 周期结束）
+        warm_restart_tag = ""
+        if self.use_scheduler and isinstance(
+            self.scheduler,
+            torch.optim.lr_scheduler.CosineAnnealingWarmRestarts,
+        ):
+            T_0 = self.scheduler.T_0
+            T_mult = self.scheduler.T_mult
+            # 当 epoch 是重启点时标记
+            t = T_0
+            while t <= epoch:
+                if epoch == t:
+                    warm_restart_tag = "  ← Warm Restart"
+                    break
+                t += T_0 * (T_mult ** (t // T_0))
+
         log.info(
-            f"Loss after epoch {epoch}: {loss} \n"
-            f"~ Runtime {elapsed:.2f} s, {mem_aloc} Mb reserved GPU memory",
+            f"[Epoch {epoch:>4}/{self.epochs}] loss={avg_loss:.4f} | "
+            f"lr={lr:.2e} | time={elapsed:.1f}s | mem={mem_mb}MB{warm_restart_tag}"
         )

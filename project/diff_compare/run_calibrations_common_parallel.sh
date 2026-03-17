@@ -13,7 +13,7 @@ if [ -f "$UV_VENV/bin/activate" ]; then
 fi
 
 : "${PYTHON:=python3}"
-MAX_PARALLEL=4
+MAX_PARALLEL=6
 
 # 按参数量分4组，避免同时跑大参数模型导致OOM
 # 每次从各组各取1个模型并行，保证4个槽内存压力均衡

@@ -8,9 +8,7 @@ import numpy as np
 
 # 配置
 JSON_PATH = (
-    "/workspace/my_deltamodel/project/diff_compare/output/camels_559/"
-    "train1989-1998/no_multi/Calibrate_E100_R365_B100_n128_noLn_noWU_42/"
-    "hbv96/KgeLoss/stat/train1989-1998_Ep100/metrics.json"
+    "/workspace/my_deltamodel/project/diff_compare/output/camels_559/train1989-1998/no_multi/Calibrate_E100_R365_B100_n20_noLn_noWU_42/collie1/KgeLoss/stat/train1989-1998_Ep100/metrics.json"
 )
 METRIC_KEY = "kge"
 N_BASINS = 559

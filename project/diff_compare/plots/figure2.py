@@ -42,7 +42,7 @@ plt.rcParams.update(
 # ==========================================
 CSV_DIR = Path(__file__).resolve().parent / "csv"
 
-DIF_TEST_FILE = CSV_DIR / "dif_test_kge.csv"
+DIF_TEST_FILE = CSV_DIR / "dif_test_kge2.csv"
 MARRMOT_TEST_FILE = CSV_DIR / "marrmot_test_kge.csv"
 
 # Use invKGE (1/Q) instead of train-set KGE

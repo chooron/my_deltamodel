@@ -52,17 +52,16 @@ delta_model:
     model: Calibrate
   phy_model:
     attributes: []
-    check_water_balance: true
+    directory: /workspace/my_deltamodel/dmg/models/phy_models/specialv1
     dy_drop: 0.0
     forcings:
     - prcp
     - tmean
     - pet
     model:
-    - UnifyV2
-    model_name: vic
+    - Gr4j
     nearzero: 1e-6
-    nmul: 128
+    nmul: 20
     use_log_norm: []
     warm_up: 365
     warm_up_states: false
@@ -70,10 +69,9 @@ delta_model:
 device: cuda
 gpu_id: 0
 loss_function:
-  model: KgeInverseLoss
+  model: KgeLoss
 mode: train
 random_seed: 42
-save_output: false
 save_path: project/diff_compare/output
 simulation:
   batch_size: 25
@@ -83,9 +81,7 @@ test:
   batch_size: 100
   end_time: 2009/12/31
   metrics:
-  - nse
   - kge
-  - inv_kge
   split_dataset: false
   start_time: 1999/01/01
   test_epoch: 100
@@ -93,16 +89,25 @@ train:
   batch_size: 100
   end_time: 1998/12/31
   epochs: 100
-  learning_rate: 1.0
-  lr_scheduler: None
+  learning_rate: 0.01
+  lr_scheduler: CosineAnnealingWarmRestarts
   lr_scheduler_params:
-    gamma: 0.5
-    step_size: 10
-  optimizer: Adadelta
+    T_0: 25        # 第一个周期长度，100 epoch 共4次重启
+    T_mult: 1      # 每次重启周期长度不变
+    eta_min: 0.00001  # 学习率下界
+  optimizer: Adam
   save_epoch: 50
   start_epoch: 0
   start_time: 1989/01/01
   target:
   - streamflow
+  # 日志频率控制
+  log_interval: 10          # 每10个epoch记录一次
+  # 精英变异参数
+  elite_reset_interval: 20  # 每20个epoch触发一次
+  elite_reset_start: 30     # 从第30个epoch开始
+  elite_reset_end: 90       # 第90个epoch后停止
+  elite_threshold_ratio: 0.25  # 后25%为差成员
+  elite_ratio: 0.10            # 前10%为精英池
 trained_model: project/diff_compare/output/model/
-trainer: CalTrainer
+trainer: EliteCalTrainer

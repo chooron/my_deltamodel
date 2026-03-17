@@ -1,9 +1,11 @@
 from typing import Tuple
 import torch
 import torch.nn.functional as F
+
+# 假设您已经在同级目录下的 mopex1.py 中使用了上一轮修复好的 evap_7 
 from .mopex1 import (
     MOPEX1_PARAMS_BOUNDS,
-    baseflow_1,
+    baseflow_1,    # 虽然导入了，但在下方已改为解析解计算以防梯度截断
     recharge_3,
     evap_7,
     saturation_1,
@@ -14,14 +16,14 @@ MOPEX2_PARAMS_BOUNDS: dict = MOPEX1_PARAMS_BOUNDS.copy()
 MOPEX2_PARAMS_BOUNDS.update(
     {
         "ddf": [0.0, 20.0],  # mm/day/C (Expanded range for large samples)
-        "tr": [-2.0, 3.0],  # Critical temperature [C]
+        "tr": [-2.0, 3.0],   # Critical temperature [C]
     }
 )
 
 def create_initial_state(
     n_grid: int, nmul: int, device: torch.device, nearzero: float = 1e-6
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Initialize state variables (S1, S2, Sc1, Sc2)."""
+    """Initialize state variables (S1, S2, Sc1, Sc2, Sn)."""
     return (
         torch.zeros((n_grid, nmul), device=device) + nearzero,
         torch.zeros((n_grid, nmul), device=device) + nearzero,
@@ -40,27 +42,21 @@ def melt_1(
     """
     Degree-Day Snowmelt Module.
     Returns:
-        Ps: Snowfall (Solid P)
-        Pr: Rainfall (Liquid P)
+        is_rain: Fraction of liquid precipitation
         Qn: Snowmelt
     """
-    # 1. Split Precipitation (Masking for stability)
-    # T <= T_crit: Snow; T > T_crit: Rain
-    is_rain = (T > T_crit).float()
+    # ✅ 修复：使用 Sigmoid 替代 (T > T_crit).float()
+    # 提供平滑的雨雪混合过渡区，使得反向传播时能拥有连续的梯度
+    is_rain = torch.sigmoid(T - T_crit)
     
-    # Note: P is not input here, splitting logic usually happens with P.
-    # But to keep modular, we just return the split fraction or handle P outside.
-    # Here we assume P is handled outside or passed in. 
-    # Let's handle Melt logic solely on T and Sn here.
-    
-    # 2. Potential Melt
-    # Melt = ddf * (T - T_crit) * dt
+    # Potential Melt (F.relu 天然可导)
     melt_pot = F.relu(T - T_crit) * ddf * dt
     
-    # 3. Actual Melt (limited by Snow Storage)
+    # Actual Melt 
     Qn = torch.minimum(melt_pot, Sn)
     
     return is_rain, Qn
+
 
 def mopex2_step(
     P: torch.Tensor,
@@ -92,61 +88,63 @@ def mopex2_step(
     torch.Tensor,
 ]:
     # --- 0. Guards ---
-    S1 = F.relu(S1)
-    S2 = F.relu(S2)
+    S1  = F.relu(S1)
+    S2  = F.relu(S2)
     Sc1 = F.relu(Sc1)
     Sc2 = F.relu(Sc2)
-    Sn = F.relu(Sn)
+    Sn  = F.relu(Sn)
 
     # --- 1. Snow Module ---
-    # Determine rain/snow fraction
-    is_rain, flux_qn = melt_1(
-        T, Sn, ddf, T_crit=0.0, dt=delta_t
-    )  # Assuming tr is used as offset or T_crit
-    # Or using the parameter 'tr' directly:
-    is_rain = (T > tr).float()
-    flux_qn = torch.minimum(F.relu(T - tr) * ddf * delta_t, Sn)
+    # ✅ 修复：将硬阈值 (T > tr).float() 替换为 Sigmoid。
+    # 这一步对于神经网络学习 tr 参数至关重要，否则 tr 将无法从降水分配中获得梯度！
+    is_rain = torch.sigmoid(T - tr)
+    flux_qn = torch.minimum(is_rain* F.softplus(T - tr) * ddf * delta_t, Sn)
 
-    Ps = P * (1 - is_rain)  # Snowfall
-    Pr = P * is_rain  # Rainfall
+    Ps = P * (1.0 - is_rain)  # Snowfall
+    Pr = P * is_rain          # Rainfall
 
     # Update Snowpack
-    Sn_new = torch.clamp(Sn + Ps - flux_qn, min=0.0)
+    # (Sn - flux_qn >= 0 且 Ps >= 0，所以天然 >= 0，无需再用 clamp 截断梯度)
+    Sn_new = Sn + Ps - flux_qn
 
     # Effective Precipitation entering Soil
     P_eff = Pr + flux_qn
 
-    # --- 2. Surface Soil (S1) ---
-    S1 = S1 + P_eff
-    flux_q1f = saturation_1(torch.zeros_like(S1), S1, Sb1)
-    S1 = S1 - flux_q1f
+    # --- 2. Surface Soil (S1): overflow -> ET -> infiltration ---
+    flux_q1f = F.relu((S1 + P_eff) - Sb1)
+    S1 = S1 + P_eff - flux_q1f
 
-    flux_qw_pot = recharge_3(tw, S1)
-    flux_qw = torch.minimum(flux_qw_pot, S1)
-    S1 = S1 - flux_qw
-
-    flux_et1_pot = evap_7(S1, Sb1, PET, delta_t)
+    # evap_7 已在 mopex1 中修复了不超 PET 的问题
+    flux_et1_pot = evap_7(S1, Sb1, PET, delta_t, nearzero)
     flux_et1 = torch.minimum(flux_et1_pot, S1)
-    S1_new = torch.clamp(S1 - flux_et1, min=0.0)
+    S1 = S1 - flux_et1
+
+    # ✅ 修复：将前向欧拉替换为指数解析解，保证时间参数 tw 全局可导
+    flux_qw = S1 * (1.0 - torch.exp(-delta_t / (tw + nearzero)))
+    S1_new  = S1 - flux_qw
 
     # --- 3. Subsurface (S2) ---
     S2 = S2 + flux_qw
-    flux_q2u_pot = baseflow_1(tu, S2)
-    flux_q2u = torch.minimum(flux_q2u_pot, S2)
+    
+    # ✅ 修复：将基流的前向欧拉替换为指数解析解
+    flux_q2u = S2 * (1.0 - torch.exp(-delta_t / (tu + nearzero)))
     S2 = S2 - flux_q2u
 
-    flux_et2_pot = evap_7(S2, Se, PET, delta_t)
+    remaining_pet = F.relu(PET - flux_et1)
+    flux_et2_pot = evap_7(S2, Se, remaining_pet, delta_t, nearzero)
     flux_et2 = torch.minimum(flux_et2_pot, S2)
-    S2_new = torch.clamp(S2 - flux_et2, min=0.0)
+    S2_new = S2 - flux_et2
 
     # --- 4. Routing ---
     Sc1 = Sc1 + flux_q1f
-    flux_qf = torch.minimum(baseflow_1(tc, Sc1), Sc1)
-    Sc1_new = torch.clamp(Sc1 - flux_qf, min=0.0)
+    # ✅ 修复：将汇流的前向欧拉替换为指数解析解
+    flux_qf = Sc1 * (1.0 - torch.exp(-delta_t / (tc + nearzero)))
+    Sc1_new = Sc1 - flux_qf
 
     Sc2 = Sc2 + flux_q2u
-    flux_qs = torch.minimum(baseflow_1(tc, Sc2), Sc2)
-    Sc2_new = torch.clamp(Sc2 - flux_qs, min=0.0)
+    # ✅ 修复：将汇流的前向欧拉替换为指数解析解
+    flux_qs = Sc2 * (1.0 - torch.exp(-delta_t / (tc + nearzero)))
+    Sc2_new = Sc2 - flux_qs
 
     Q_total = flux_qf + flux_qs
     ET_total = flux_et1 + flux_et2
