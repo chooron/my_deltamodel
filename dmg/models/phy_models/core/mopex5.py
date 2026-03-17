@@ -6,7 +6,14 @@ from .mopex1 import (
     evap_7,
     saturation_1,
 )
-from .mopex4 import interception_seasonal
+from .mopex4 import interception_seasonal, MOPEX4_PARAMS_BOUNDS
+
+
+MOPEX5_PARAMS_BOUNDS = MOPEX4_PARAMS_BOUNDS.copy()
+MOPEX5_PARAMS_BOUNDS.update({
+    "tmin": [-10.0, 5.0],
+    "tmax": [5.0, 30.0],
+})
 
 def create_initial_state(
     n_grid: int, nmul: int, device: torch.device, nearzero: float = 1e-6
