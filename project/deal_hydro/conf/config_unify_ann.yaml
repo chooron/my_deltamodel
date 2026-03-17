@@ -58,8 +58,8 @@ delta_model:
     - tmean
     - pet
     model:
-    - UnifyV3
-    model_name: hbv96
+    - UnifyV2
+    model_name: mopex4
     nearzero: 1e-6
     nmul: 1
     use_log_norm: []

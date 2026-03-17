@@ -19,7 +19,12 @@ import torch
 import torch.nn as nn
 
 from dmg.models.hydrodl2 import change_param_range, uh_gamma, uh_conv
-from dmg.models.phy_models.core import PARAM_INFO, STFN_INFO, INIT_INFO, STATE_INFO
+from dmg.models.phy_models.core import (
+    PARAM_INFO,
+    STFN_INFO,
+    INIT_INFO,
+    STATE_INFO,
+)
 
 
 class UnifyV2(nn.Module):
@@ -60,8 +65,8 @@ class UnifyV2(nn.Module):
         self.routing = False
 
         self.routing_parameter_bounds = {
-            'rout_a': [0, 2.9],
-            'rout_b': [0, 6.5],
+            "rout_a": [0, 2.9],
+            "rout_b": [0, 6.5],
         }
 
         self.backend = self.config.get("backend", backend)
@@ -80,7 +85,14 @@ class UnifyV2(nn.Module):
         self._set_parameters()
 
     def _load_config(self, config: Dict) -> None:
-        for attr in ["warm_up", "warm_up_states", "variables", "nearzero", "nmul", "routing"]:
+        for attr in [
+            "warm_up",
+            "warm_up_states",
+            "variables",
+            "nearzero",
+            "nmul",
+            "routing",
+        ]:
             if attr in config:
                 setattr(self, attr, config[attr])
         self.check_water_balance = config.get("check_water_balance", False)
@@ -88,18 +100,23 @@ class UnifyV2(nn.Module):
     def _set_parameters(self) -> None:
         self.phy_param_names = list(self.parameter_bounds.keys())
         if self.routing:
-            self.routing_param_names = list(self.routing_parameter_bounds.keys())
+            self.routing_param_names = list(
+                self.routing_parameter_bounds.keys()
+            )
         else:
             self.routing_param_names = []
-        self.learnable_param_count = (
-            len(self.phy_param_names) * self.nmul + len(self.routing_param_names)
-        )
+        self.learnable_param_count = len(
+            self.phy_param_names
+        ) * self.nmul + len(self.routing_param_names)
 
     def _init_states(self, n_grid: int) -> Tuple[torch.Tensor, ...]:
         return self.init_fn(n_grid, self.nmul, self.device, self.nearzero)
 
     def _descale_params(
-        self, params: torch.Tensor, names: List[str], bounds: Dict[str, List[float]]
+        self,
+        params: torch.Tensor,
+        names: List[str],
+        bounds: Dict[str, List[float]],
     ) -> Dict[str, torch.Tensor]:
         return {
             name: change_param_range(params[:, i, :], bounds[name])
@@ -151,7 +168,9 @@ class UnifyV2(nn.Module):
         if self.routing and routing_params is not None:
             routing_param_dict = self._descale_routing_params(routing_params)
 
-        return self._run_model(x_dict, states, phy_static_dict, routing_param_dict)
+        return self._run_model(
+            x_dict, states, phy_static_dict, routing_param_dict
+        )
 
     # -----------------------------------------------------------------------
     # [改动 1] _run_model：warmup 段 no_grad + 状态 detach，训练段正常建图
@@ -188,9 +207,7 @@ class UnifyV2(nn.Module):
             for t in range(effective_warmup):
                 outputs = self.step_fn(
                     P_seq[t], T_seq[t], PET_seq[t],
-                    *param_values,
-                    *curr_states,
-                    self.nearzero,
+                    *param_values, *curr_states, self.nearzero,
                 )
                 if self.warm_up_states:
                     warmup_outputs.append(outputs[0])
@@ -207,9 +224,7 @@ class UnifyV2(nn.Module):
         for i, t in enumerate(range(effective_warmup, n_steps)):
             outputs = self.step_fn(
                 P_seq[t], T_seq[t], PET_seq[t],
-                *param_values,
-                *curr_states,
-                self.nearzero,
+                *param_values, *curr_states, self.nearzero,
             )
             train_out[i] = outputs[0]
             curr_states = outputs[2:]
@@ -242,8 +257,8 @@ class UnifyV2(nn.Module):
             n_steps, n_grid = Qsimavg.shape
 
             UH = uh_gamma(
-                routing_param_dict['rout_a'].repeat(n_steps, 1).unsqueeze(-1),
-                routing_param_dict['rout_b'].repeat(n_steps, 1).unsqueeze(-1),
+                routing_param_dict["rout_a"].repeat(n_steps, 1).unsqueeze(-1),
+                routing_param_dict["rout_b"].repeat(n_steps, 1).unsqueeze(-1),
                 lenF=15,
             )
 

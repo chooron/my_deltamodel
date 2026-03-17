@@ -43,24 +43,23 @@ delta_model:
     - geol_porosity
     - geol_permeability
     batch_size: 100
-    dr: 0.0
+    dr: 0.2
     forcings:
     - prcp
     - tmean
     - pet
     hidden_size: 128
-    model: AnnModel
+    model: Parameterize
   phy_model:
+    directory: /workspace/my_deltamodel/dmg/models/phy_models/specialv2
     attributes: []
-    check_water_balance: false
-    directory: /workspace/my_deltamodel/dmg/models/phy_models/specialv1
     dy_drop: 0.0
     forcings:
     - prcp
     - tmean
     - pet
     model:
-    - Mopex5
+    - Mopex4
     nearzero: 1e-6
     nmul: 1
     use_log_norm: []
@@ -80,14 +79,13 @@ simulation:
   start_time: 2012/10/01
 test:
   batch_size: 100
-  end_time: 1998/12/31
-  metrics:
-  - nse
-  - kge
-  - inv_kge
-  split_dataset: true
-  start_time: 1989/01/01
+  end_time: 2009/12/31
+  split_dataset: false
+  start_time: 1999/01/01
   test_epoch: 100
+  metrics:
+    - kge
+    - nse
 train:
   batch_size: 100
   end_time: 1998/12/31
@@ -103,5 +101,4 @@ train:
   start_time: 1989/01/01
   target:
   - streamflow
-trained_model: project/deal_hydro/output/model/
-trainer: CalTrainer
+trainer: FasterTrainer

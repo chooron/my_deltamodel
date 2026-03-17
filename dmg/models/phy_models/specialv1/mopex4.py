@@ -62,16 +62,16 @@ class Mopex4(UnifyV1):
         doy_seq = doy_raw.expand(-1, -1, nmul).unbind(0)
 
         # Unpack Parameters
-        Sb1 = static_params["Sb1"]
-        tw = static_params["tw"]
-        tu = static_params["tu"]
-        Se = static_params["Se"]
-        tc = static_params["tc"]
-        ddf = static_params["ddf"]
         tcrit = static_params["tcrit"]
-        Sb2 = static_params["Sb2"]
+        ddf = static_params["ddf"]
+        Sb1 = static_params["s2max"]
+        tw = static_params["tw"]
         alpha = static_params["alpha"]
         is_time = static_params["is_time"]
+        tu = static_params["tu"]
+        Se = static_params["se"]
+        Sb2 = static_params["s3max"]
+        tc = static_params["tc"]
 
         S1, S2, Sc1, Sc2, Sn = states
 
@@ -83,16 +83,16 @@ class Mopex4(UnifyV1):
                 T_seq[t],
                 PET_seq[t],
                 doy_seq[t],
+                tcrit,
+                ddf,
                 Sb1,
                 tw,
-                tu,
-                Se,
-                tc,
-                ddf,
-                tcrit,
-                Sb2,
                 alpha,
                 is_time,
+                tu,
+                Se,
+                Sb2,
+                tc,
                 S1,
                 S2,
                 Sc1,

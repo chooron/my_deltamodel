@@ -15,7 +15,7 @@ from project.deal_hydro import load_config  # noqa: E402
 
 # ------------------------------------------#
 # Define model settings here.
-CONFIG_PATH = r"conf/config_unify_ann.yaml"
+CONFIG_PATH = r"conf/config_special_ann.yaml"
 # ------------------------------------------#
 # model training
 config = load_config(CONFIG_PATH)
