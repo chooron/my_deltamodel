@@ -24,7 +24,19 @@
       "Bash(chmod +x /workspace/my_deltamodel/project/diff_compare/run_calibrations_kge_parallel.sh)",
       "Bash(chmod +x /workspace/my_deltamodel/project/diff_compare/run_calibrations_invkge_parallel.sh)",
       "Bash(source .venv/bin/activate)",
-      "Bash(grep -n \"def _init_states\\\\|def _run_model\\\\|nmul = self.nmul\\\\|self.nmul\\)\" /workspace/my_deltamodel/dmg/models/phy_models/specialv1/*.py)"
+      "Bash(grep -n \"def _init_states\\\\|def _run_model\\\\|nmul = self.nmul\\\\|self.nmul\\)\" /workspace/my_deltamodel/dmg/models/phy_models/specialv1/*.py)",
+      "Bash(grep -n \"warm_up\\\\|flatten\\\\|streamflow\" /workspace/my_deltamodel/dmg/models/phy_models/specialv1/*.py)",
+      "Bash(grep -l \"step\\\\|_step\" /workspace/my_deltamodel/dmg/models/phy_models/core/*.py)",
+      "Bash(xargs basename:*)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Read(//workspace/my_deltamodel/dmg/models/phy_models/specialv1/**)",
+      "Bash(done)",
+      "Bash(do)",
+      "Bash(python3 -c \"open\\(''/workspace/my_deltamodel/dmg/models/phy_models/specialv1/$f.py''\\).read\\(\\)\")",
+      "Bash(echo \"$f: readable\")",
+      "Bash(git checkout:*)",
+      "Bash(grep -n \"no_grad\\\\|warm_up\\\\|detach\" /workspace/my_deltamodel/dmg/models/phy_models/specialv1/*.py)"
     ]
   }
 }

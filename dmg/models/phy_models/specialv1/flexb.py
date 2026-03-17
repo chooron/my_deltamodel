@@ -218,13 +218,20 @@ class Flexb(UnifyV1):
         ks = static_params["ks"]
 
         S1, S2, S3 = states
+        warm_up = min(self.warm_up, n_steps)
+
+        with torch.no_grad():
+            for t in range(warm_up):
+                _, _, _, S1 = self.production_step(
+                    P_seq[t], PET_seq[t], S1,
+                    s1max, beta, d_split, percmax, lp, nearzero)
+        S1 = S1.detach()
 
         # ==========================================================
         # Phase 1: Production Loop
         # ==========================================================
         raw_rf_list = []
         raw_slow_list = []
-        # ea_list = []
 
         for t in range(n_steps):
             flux_rf, flux_slow_in, flux_eur, S1 = self.production_step(

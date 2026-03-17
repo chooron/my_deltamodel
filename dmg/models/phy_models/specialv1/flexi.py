@@ -239,13 +239,20 @@ class Flexi(UnifyV1):
 
         # Unpack States
         S1, S2, S3, S4 = states
+        warm_up = min(self.warm_up, n_steps)
+
+        with torch.no_grad():
+            for t in range(warm_up):
+                _, _, _, S1, S2 = self.production_step(
+                    P_seq[t], PET_seq[t], S1, S2,
+                    smax, beta, d_split, percmax, lp, imax, nearzero)
+        S1, S2 = S1.detach(), S2.detach()
 
         # ==========================================================
         # Phase 1: Production Loop (Python Loop + Compiled Step)
         # ==========================================================
         raw_fast_list = []
         raw_slow_list = []
-        # ea_list = [] # Uncomment if evaporation output is needed
 
         for t in range(n_steps):
             flux_rf, flux_rs_total, flux_ea, S1, S2 = self.production_step(

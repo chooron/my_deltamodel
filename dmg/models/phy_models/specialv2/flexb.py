@@ -1,314 +1,106 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Tuple, Optional, Any, List
+from typing import Dict, Tuple, Optional, Any
 
-from dmg.models.phy_models.unify_v1 import UnifyV1
-
-# 引入通量计算函数
+from dmg.models.phy_models.unify_v2 import UnifyV2, _maybe_compile
 from dmg.models.phy_models.flux.saturation import saturation_3
 from dmg.models.phy_models.flux.evap import evap_3
 from dmg.models.phy_models.flux.percolation import percolation_2
 from dmg.models.phy_models.flux.split import split_1
 from dmg.models.phy_models.flux.baseflow import baseflow_1
-
-# 引入单位线 (Triangular UH)
 from dmg.models.phy_models.unithydro.uh_tri_3 import DplTri3
 
-
-# ==============================================================================
-# 1. Parameter Definitions
-# ==============================================================================
-FLEXB_PARAMS_BOUNDS = {
-    "s1max": [1.0, 2000.0],  # Maximum soil moisture storage [mm]
-    "beta": [0.0, 10.0],     # Unsaturated zone shape parameter [-]
-    "d_split": [0.0, 1.0],   # Fast/slow runoff distribution parameter [-]
-    "percmax": [0.0, 20.0],  # Maximum percolation rate [mm/d]
-    "lp": [0.05, 0.95],      # Wilting point as fraction of s1max [-]
-    "nlagf": [1.0, 5.0],     # Flow delay before fast runoff [d]
-    "nlags": [1.0, 15.0],    # Flow delay before slow runoff [d]
-    "kf": [0.0, 1.0],        # Fast runoff coefficient [d-1]
-    "ks": [0.0, 1.0],        # Slow runoff coefficient [d-1]
-}
-
-FLEXB_PARAMS_DESC = {
-    "s1max": "Maximum soil moisture storage [mm]",
-    "beta": "Unsaturated zone shape parameter [-]",
-    "d_split": "Fast/slow runoff distribution parameter [-]",
-    "percmax": "Maximum percolation rate [mm/d]",
-    "lp": "Wilting point as fraction of s1max [-]",
-    "nlagf": "Flow delay before fast runoff [d]",
-    "nlags": "Flow delay before slow runoff [d]",
-    "kf": "Fast runoff coefficient [d-1]",
-    "ks": "Slow runoff coefficient [d-1]",
-}
+_NLAGF_MAX = 5
+_NLAGS_MAX = 15
 
 
-# ==============================================================================
-# 2. Static Step Functions (Compiled)
-# ==============================================================================
-
-def _flexb_production_step_impl(
-    P: torch.Tensor,
-    PET: torch.Tensor,
-    S1: torch.Tensor, # Unsaturated Soil
-    s1max: torch.Tensor,
-    beta: torch.Tensor,
-    d_split: torch.Tensor,
-    percmax: torch.Tensor,
-    lp: torch.Tensor,
-    nearzero: float,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Phase 1: Production Step
-    Calculates S1 dynamics (Infiltration, Evap, Percolation).
-    
-    Returns:
-    - flux_rf: Fast flow component (to be delayed)
-    - flux_slow_in: Slow flow component (rs + ps) (to be delayed)
-    - flux_eur: Actual Evap
-    - S1_new: Updated State
-    """
-    # --- 1. Infiltration ---
-    flux_ru = saturation_3(S1, s1max, beta, P, nearzero=nearzero)
-    zeros = torch.zeros_like(flux_ru)
-    flux_ru = torch.clamp(flux_ru, min=zeros, max=P)
-
-    # Surface Excess
+def _production_step(P, PET, S1, s1max, beta, d_split, percmax, lp, nearzero):
+    flux_ru = torch.clamp(saturation_3(S1, s1max, beta, P, nearzero=nearzero),
+                          min=torch.zeros_like(P), max=P)
     p_excess = F.relu(P - flux_ru)
-
-    # Split Excess
     flux_rf = split_1(1.0 - d_split, p_excess, nearzero=nearzero)
-    flux_rs = F.relu(p_excess - flux_rf)
-
-    # --- 2. State Update S1 ---
+    flux_slow = F.relu(p_excess - flux_rf)
     S1_tmp = torch.clamp(S1 + flux_ru, min=nearzero)
-
-    # Evaporation
-    flux_eur = evap_3(lp, S1_tmp, s1max, PET, nearzero=nearzero)
-    flux_eur = torch.minimum(flux_eur, S1_tmp - nearzero)
-    flux_eur = torch.minimum(flux_eur, PET)
-    flux_eur = F.relu(flux_eur)
-
+    flux_eur = torch.clamp(
+        torch.minimum(torch.minimum(evap_3(lp, S1_tmp, s1max, PET, nearzero=nearzero), S1_tmp - nearzero), PET),
+        min=0.0)
     S1_tmp2 = torch.clamp(S1_tmp - flux_eur, min=nearzero)
-
-    # Percolation
-    flux_ps = percolation_2(percmax, S1_tmp2, s1max, nearzero=nearzero)
-    flux_ps = torch.minimum(flux_ps, S1_tmp2 - nearzero)
-    flux_ps = F.relu(flux_ps)
-
+    flux_ps = torch.clamp(torch.minimum(percolation_2(percmax, S1_tmp2, s1max, nearzero=nearzero), S1_tmp2 - nearzero), min=0.0)
     S1_new = torch.clamp(S1_tmp2 - flux_ps, min=nearzero)
-
-    # --- 3. Outputs for Routing ---
-    # Slow branch receives both Split Excess (rs) and Percolation (ps)
-    flux_slow_in = flux_rs + flux_ps
-
-    return flux_rf, flux_slow_in, flux_eur, S1_new
+    return flux_rf, flux_slow + flux_ps, flux_eur, S1_new
 
 
-def _flexb_routing_step_impl(
-    flux_rfl: torch.Tensor, # Routed Fast Inflow
-    flux_rsl: torch.Tensor, # Routed Slow Inflow
-    S2: torch.Tensor,       # Fast Reservoir
-    S3: torch.Tensor,       # Slow Reservoir
-    kf: torch.Tensor,
-    ks: torch.Tensor,
-    nearzero: float,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Phase 3: Routing Step (Linear Reservoirs S2 & S3)
-    """
-    # --- Fast Store (S2) ---
-    S2_tmp = torch.clamp(S2 + flux_rfl, min=nearzero)
-    
-    flux_qf = baseflow_1(kf, S2_tmp, nearzero=nearzero)
-    flux_qf = torch.minimum(flux_qf, S2_tmp - nearzero)
-    flux_qf = F.relu(flux_qf)
-    
-    S2_new = torch.clamp(S2_tmp - flux_qf, min=nearzero)
-
-    # --- Slow Store (S3) ---
-    S3_tmp = torch.clamp(S3 + flux_rsl, min=nearzero)
-    
-    flux_qs = baseflow_1(ks, S3_tmp, nearzero=nearzero)
-    flux_qs = torch.minimum(flux_qs, S3_tmp - nearzero)
-    flux_qs = F.relu(flux_qs)
-    
-    S3_new = torch.clamp(S3_tmp - flux_qs, min=nearzero)
-
-    # Total Q
-    Qsim = flux_qf + flux_qs
-
-    return Qsim, S2_new, S3_new
+def _routing_step(rfl, rsl, S2, S3, kf, ks, nearzero):
+    S2_tmp = torch.clamp(S2 + rfl, min=nearzero)
+    qf = torch.clamp(torch.minimum(baseflow_1(kf, S2_tmp, nearzero=nearzero), S2_tmp - nearzero), min=0.0)
+    S2_new = torch.clamp(S2_tmp - qf, min=nearzero)
+    S3_tmp = torch.clamp(S3 + rsl, min=nearzero)
+    qs = torch.clamp(torch.minimum(baseflow_1(ks, S3_tmp, nearzero=nearzero), S3_tmp - nearzero), min=0.0)
+    S3_new = torch.clamp(S3_tmp - qs, min=nearzero)
+    return qf + qs, S2_new, S3_new
 
 
-def _maybe_compile(fn, backend: str):
-    if backend == "compile" and hasattr(torch, "compile"):
-        return torch.compile(fn)
-    if backend == "jit":
-        return torch.jit.script(fn)
-    return fn
+class Flexb(UnifyV2):
+    """Flex-B (MARRMoT m_21): Production -> Conv -> Routing."""
 
-
-# ==============================================================================
-# 3. Model Class (FlexbModel)
-# ==============================================================================
-
-class Flexb(UnifyV1):
-    """
-    Flex-B Hydrological Model (MARRMoT m_21)
-    
-    Architecture: Sandwich (Loop -> Conv -> Loop)
-    1. Production: Generates fast (rf) and slow (rs+ps) inflows.
-    2. Convolution: Delays flows using Triangular UH (nlagf, nlags).
-    3. Routing: Routes delayed flows through Linear Reservoirs (S2, S3).
-    """
-
-    def __init__(
-        self,
-        config: Optional[Dict[str, Any]] = None,
-        device: Optional[torch.device] = None,
-        backend: str = "compile",
-    ) -> None:
-        if config is None: config = {}
+    def __init__(self, config=None, device=None, backend="compile"):
+        if config is None:
+            config = {}
         config.setdefault("model_name", "flexb")
         super().__init__(config, device, backend)
-
-        # Initialize Unit Hydrographs (Half Triangle)
-        self.uh_fast = DplTri3(max_lag=int(FLEXB_PARAMS_BOUNDS["nlagf"][1]))
-        self.uh_slow = DplTri3(max_lag=int(FLEXB_PARAMS_BOUNDS["nlags"][1]))
-        self.production_step = _maybe_compile(_flexb_production_step_impl, self.backend)
-        self.routing_step = _maybe_compile(_flexb_routing_step_impl, self.backend)
+        self.uh_fast = DplTri3(max_lag=_NLAGF_MAX)
+        self.uh_slow = DplTri3(max_lag=_NLAGS_MAX)
+        self.production_step = _maybe_compile(_production_step, self.backend)
+        self.routing_step = _maybe_compile(_routing_step, self.backend)
 
     def _init_states(self, n_grid: int) -> Tuple[torch.Tensor, ...]:
-        """S1: Unsaturated, S2: Fast, S3: Slow"""
-        S1 = torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
-        S2 = torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
-        S3 = torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
-        return (S1, S2, S3)
+        z = torch.zeros((n_grid, 1), device=self.device) + self.nearzero
+        return (z.clone(), z.clone(), z.clone())
 
-    def _run_model(
-        self,
-        x: dict,
-        states: Tuple[torch.Tensor, ...],
-        static_params: Dict[str, torch.Tensor],
-    ) -> Dict[str, torch.Tensor]:
-        forcing = x['x_phy']
+    def _run_model(self, x_dict, states, params_dict):
+        forcing = x_dict["x_phy"]
         n_steps, n_grid = forcing.shape[:2]
-        nmul = self.nmul
         nearzero = self.nearzero
 
-        # --- A. Data Prep ---
-        # Unbind forcing
-        P_seq = forcing[..., 0:1].expand(-1, -1, nmul).unbind(0)
-        # T_seq unused
-        PET_seq = forcing[..., 2:3].expand(-1, -1, nmul).unbind(0)
+        P_seq   = forcing[..., 0:1].unbind(0)
+        PET_seq = forcing[..., 2:3].unbind(0)
 
-        # Unpack Parameters
-        s1max = static_params["s1max"]
-        beta = static_params["beta"]
-        d_split = static_params["d_split"]
-        percmax = static_params["percmax"]
-        lp = static_params["lp"]
-        nlagf = static_params["nlagf"]
-        nlags = static_params["nlags"]
-        kf = static_params["kf"]
-        ks = static_params["ks"]
+        s1max   = params_dict["s1max"]
+        beta    = params_dict["beta"]
+        d_split = params_dict["d_split"]
+        percmax = params_dict["percmax"]
+        lp      = params_dict["lp"]
+        nlagf   = params_dict["nlagf"]
+        nlags   = params_dict["nlags"]
+        kf      = params_dict["kf"]
+        ks      = params_dict["ks"]
 
-        S1, S2, S3 = states
+        def warmup_step(t, curr):
+            S1, S2, S3 = curr
+            _, _, _, S1_new = self.production_step(
+                P_seq[t], PET_seq[t], S1, s1max, beta, d_split, percmax, lp, nearzero)
+            return (S1_new, S2, S3)
 
-        track_balance = self.check_water_balance
-        if track_balance:
-            Et_out = torch.empty(
-                (n_steps, n_grid, nmul), device=self.device, dtype=torch.float32
-            )
-            state_series: Optional[List[torch.Tensor]] = [
-                torch.empty(
-                    (n_steps + 1, n_grid, nmul),
-                    device=self.device,
-                    dtype=torch.float32,
-                )
-                for _ in range(3)
-            ]
-            state_series[0][0] = S1
-            state_series[1][0] = S2
-            state_series[2][0] = S3
-            S_init_sum = torch.stack([s.clone() for s in states]).sum(dim=0)
-        else:
-            Et_out = None
-            state_series = None
-            S_init_sum = None
+        S1, S2, S3 = self._run_warmup(warmup_step, n_steps, states)
 
-        # ==========================================================
-        # Phase 1: Production Loop
-        # ==========================================================
-        raw_rf_list = []
-        raw_slow_list = []
-        # ea_list = []
-
+        rf_list, slow_list = [], []
         for t in range(n_steps):
-            flux_rf, flux_slow_in, flux_eur, S1 = self.production_step(
-                P_seq[t], PET_seq[t], S1,
-                s1max, beta, d_split, percmax, lp,
-                nearzero
-            )
-            raw_rf_list.append(flux_rf)
-            raw_slow_list.append(flux_slow_in)
-            if track_balance:
-                Et_out[t] = flux_eur
-                state_series[0][t + 1] = S1
+            flux_rf, flux_slow, _, S1 = self.production_step(
+                P_seq[t], PET_seq[t], S1, s1max, beta, d_split, percmax, lp, nearzero)
+            rf_list.append(flux_rf)
+            slow_list.append(flux_slow)
 
-        # Stack: (T, B, M)
-        rf_stack = torch.stack(raw_rf_list, dim=0)
-        slow_stack = torch.stack(raw_slow_list, dim=0)
+        B = n_grid
+        rfl_seq = self.uh_fast(
+            torch.stack(rf_list, 0).permute(1, 2, 0).reshape(B, n_steps), nlagf.reshape(B, 1)
+        ).view(n_grid, 1, n_steps).permute(2, 0, 1).unbind(0)
+        rsl_seq = self.uh_slow(
+            torch.stack(slow_list, 0).permute(1, 2, 0).reshape(B, n_steps), nlags.reshape(B, 1)
+        ).view(n_grid, 1, n_steps).permute(2, 0, 1).unbind(0)
 
-        # ==========================================================
-        # Phase 2: Parallel Convolution (Fast & Slow)
-        # ==========================================================
-        # 1. Flatten for Conv1d: (B*M, T)
-        B_total = n_grid * nmul
-        rf_flat = rf_stack.permute(1, 2, 0).reshape(B_total, n_steps)
-        slow_flat = slow_stack.permute(1, 2, 0).reshape(B_total, n_steps)
-        
-        # 2. UH Params: (B*M, 1)
-        nlagf_flat = nlagf.reshape(B_total, 1)
-        nlags_flat = nlags.reshape(B_total, 1)
-
-        # 3. Apply Convolution
-        routed_rf_flat = self.uh_fast(rf_flat, nlagf_flat)
-        routed_slow_flat = self.uh_slow(slow_flat, nlags_flat)
-
-        # 4. Reshape back & Unbind: List[Tensor]
-        rfl_seq = routed_rf_flat.view(n_grid, nmul, n_steps).permute(2, 0, 1).unbind(0)
-        rsl_seq = routed_slow_flat.view(n_grid, nmul, n_steps).permute(2, 0, 1).unbind(0)
-
-        # ==========================================================
-        # Phase 3: Routing Loop (S2, S3)
-        # ==========================================================
-        Qsim_list = []
-
+        q_list = []
         for t in range(n_steps):
-            # Pass convolved fluxes to reservoirs
-            Qsim, S2, S3 = self.routing_step(
-                rfl_seq[t], rsl_seq[t], S2, S3,
-                kf, ks,
-                nearzero
-            )
-            Qsim_list.append(Qsim)
-            if track_balance and state_series is not None:
-                state_series[1][t + 1] = S2
-                state_series[2][t + 1] = S3
+            Qsim, S2, S3 = self.routing_step(rfl_seq[t], rsl_seq[t], S2, S3, kf, ks, nearzero)
+            q_list.append(Qsim)
 
-        Qsim_out = torch.stack(Qsim_list, dim=0)
-        final_states = (S1, S2, S3)
-
-        if track_balance:
-            return self._finalize_output(
-                Qsim_out,
-                Et_out,
-                S_init_sum,
-                final_states,
-                state_series,
-            )
-
-        return self._finalize_output(Qsim_out)
+        return self._finalize_output(torch.stack(q_list, dim=0), params_dict)

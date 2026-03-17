@@ -1,298 +1,92 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Tuple, Optional, Any, List
+from typing import Dict, Tuple, Optional, Any
 
-from dmg.models.phy_models.unify_v1 import UnifyV1
-
-# 引入通量计算函数
+from dmg.models.phy_models.unify_v2 import UnifyV2, _maybe_compile
 from dmg.models.phy_models.flux.interception import interception_2
 from dmg.models.phy_models.flux.infiltration import infiltration_4
 from dmg.models.phy_models.flux.evap import evap_4
 from dmg.models.phy_models.flux.capillary import capillary_2
 from dmg.models.phy_models.flux.saturation import saturation_1
 from dmg.models.phy_models.flux.baseflow import baseflow_1
-
-# 引入单位线 (Triangular UH, assuming tp uses a triangular response like Hillslope)
 from dmg.models.phy_models.unithydro.uh_tri_3 import DplTri3
 
-
-# ==============================================================================
-# 1. Parameter Bounds
-# ==============================================================================
-PLATEAU_PARAMS_BOUNDS = {
-    "fmax": [0.0, 200.0],  # Max infiltration rate [mm/d]
-    "dp": [0.0, 5.0],  # Interception capacity [mm]
-    "sumax": [1.0, 2000.0],  # Soil moisture depth [mm]
-    "lp": [0.05, 0.95],  # Wilting point fraction [-]
-    "p_coeff": [0.0, 1.0],  # Evap coefficient [-]
-    "tp": [1.0, 120.0],  # Routing delay [d]
-    "c_rise": [0.0, 4.0],  # Capillary rise [mm/d]
-    "kp": [0.0, 1.0],  # Base flow time parameter [d-1]
-}
-
-PLATEAU_PARAMS_DESC = {
-    "fmax": "Maximum infiltration rate [mm/d]",
-    "dp": "Interception capacity [mm]",
-    "sumax": "Soil moisture depth [mm]",
-    "lp": "Wilting point as fraction of Sumax [-]",
-    "p_coeff": "Coefficient for moisture constrained evaporation [-]",
-    "tp": "Time delay for routing [d]",
-    "c_rise": "Rate of capillary rise [mm/d]",
-    "kp": "Base flow time parameter [d-1]",
-}
+_TP_MAX = 120
 
 
-# ==============================================================================
-# 2. Static Step Function (Compiled)
-# ==============================================================================
-
-
-def _plateau_production_step_impl(
-    P: torch.Tensor,
-    PET: torch.Tensor,
-    S1: torch.Tensor,  # Unsaturated
-    S2: torch.Tensor,  # Saturated
-    fmax: torch.Tensor,
-    dp: torch.Tensor,
-    sumax: torch.Tensor,
-    lp: torch.Tensor,
-    p_coeff: torch.Tensor,
-    c_rise: torch.Tensor,
-    kp: torch.Tensor,
-    nearzero: float,
-) -> Tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
-]:
-    """
-    Phase 1: Production Step
-    Calculates coupled S1/S2 dynamics.
-
-    Returns:
-    - flux_pie: Surface Runoff Excess (Needs Routing)
-    - flux_qpgw: Baseflow (Direct)
-    - flux_ea: Actual Evap
-    - S1_new, S2_new
-    """
-
-    # 1. Precipitation and Interception
+def _plateau_production_step(P, PET, S1, S2, fmax, dp, sumax, lp, p_coeff, c_rise, kp, nearzero):
     flux_pe = interception_2(P, dp, nearzero=nearzero)
     flux_ei = F.relu(P - flux_pe)
-
-    # 2. Infiltration and Surface Runoff
-    # flux_pi: infiltration into S1
-    # flux_pie: surface runoff (overland flow) -> needs routing
-    flux_pi = infiltration_4(flux_pe, fmax, nearzero=nearzero)
-    flux_pi = torch.minimum(flux_pi, flux_pe)
+    flux_pi = torch.minimum(infiltration_4(flux_pe, fmax, nearzero=nearzero), flux_pe)
     flux_pie = F.relu(flux_pe - flux_pi)
-
-    # 3. Capillary Rise (from S2 to S1)
-    flux_c = capillary_2(c_rise, S2, nearzero=nearzero)
-    flux_c = torch.minimum(flux_c, S2 - nearzero)
-    flux_c = F.relu(flux_c)
-
-    # 4. Evapotranspiration from S1
-    # Update S1 interim for ET
-    S1_tmp = S1 + flux_pi + flux_c
-    S1_tmp = torch.clamp(S1_tmp, min=nearzero)
-
-    flux_et = evap_4(PET, p_coeff, S1_tmp, lp, sumax, nearzero=nearzero)
-    flux_et = torch.minimum(flux_et, S1_tmp - nearzero)
-    flux_et = torch.minimum(flux_et, PET)
-    flux_et = F.relu(flux_et)
-
+    flux_c = torch.clamp(torch.minimum(capillary_2(c_rise, S2, nearzero=nearzero), S2 - nearzero), min=0.0)
+    S1_tmp = torch.clamp(S1 + flux_pi + flux_c, min=nearzero)
+    flux_et = torch.clamp(
+        torch.minimum(torch.minimum(evap_4(PET, p_coeff, S1_tmp, lp, sumax, nearzero=nearzero), S1_tmp - nearzero), PET),
+        min=0.0)
     S1_tmp2 = torch.clamp(S1_tmp - flux_et, min=nearzero)
-
-    # 5. Percolation / Saturation Excess (S1 -> S2)
-    # flux_r: saturation excess driven by inflows (pi + c)
     inflow_s1 = flux_pi + flux_c
-    flux_r = saturation_1(inflow_s1, S1_tmp2, sumax, nearzero=nearzero)
-    zeros = torch.zeros_like(flux_r)
-    flux_r = torch.clamp(flux_r, min=zeros, max=inflow_s1)
-
-    # Final S1 update
+    flux_r = torch.clamp(saturation_1(inflow_s1, S1_tmp2, sumax, nearzero=nearzero),
+                         min=torch.zeros_like(inflow_s1), max=inflow_s1)
     S1_new = torch.clamp(S1_tmp2 - flux_r, min=nearzero)
-
-    # 6. Saturated Store process (S2)
-    # Update S2 (in: r, out: c)
-    S2_tmp = S2 + flux_r - flux_c
-    S2_tmp = torch.clamp(S2_tmp, min=nearzero)
-
-    # Baseflow
-    flux_qpgw = baseflow_1(kp, S2_tmp, nearzero=nearzero)
-    flux_qpgw = torch.minimum(flux_qpgw, S2_tmp - nearzero)
-    flux_qpgw = F.relu(flux_qpgw)
-
+    S2_tmp = torch.clamp(S2 + flux_r - flux_c, min=nearzero)
+    flux_qpgw = torch.clamp(torch.minimum(baseflow_1(kp, S2_tmp, nearzero=nearzero), S2_tmp - nearzero), min=0.0)
     S2_new = torch.clamp(S2_tmp - flux_qpgw, min=nearzero)
-
-    # Total Evap
-    flux_ea = flux_ei + flux_et
-
-    return flux_pie, flux_qpgw, flux_ea, S1_new, S2_new
+    return flux_pie, flux_qpgw, flux_ei + flux_et, S1_new, S2_new
 
 
-def _maybe_compile(fn, backend: str):
-    if backend == "compile" and hasattr(torch, "compile"):
-        return torch.compile(fn)
-    if backend == "jit":
-        return torch.jit.script(fn)
-    return fn
+class Plateau(UnifyV2):
+    """Plateau (FLEX-Topo): Production -> Conv(surface) + Baseflow."""
 
-
-# ==============================================================================
-# 3. Model Class (PlateauModel)
-# ==============================================================================
-
-
-class Plateau(UnifyV1):
-    """
-    Plateau (FLEX-Topo) Model
-
-    Architecture:
-    1. Production: Computes Surface Runoff (pie) and Baseflow (qpgw).
-    2. Convolution: Routes pie using Triangular UH (tp).
-    3. Summation: Q = routed_pie + qpgw.
-    """
-
-    def __init__(
-        self,
-        config: Optional[Dict[str, Any]] = None,
-        device: Optional[torch.device] = None,
-        backend: str = "compile",
-    ) -> None:
+    def __init__(self, config=None, device=None, backend="compile"):
         if config is None:
             config = {}
         config.setdefault("model_name", "plateau")
         super().__init__(config, device, backend)
-
-        # Initialize Unit Hydrograph for Surface Runoff (tp)
-        self.uh_surface = DplTri3(max_lag=int(PLATEAU_PARAMS_BOUNDS["tp"][1]))
-        self.production_step = _maybe_compile(_plateau_production_step_impl, self.backend)
+        self.uh_surface = DplTri3(max_lag=_TP_MAX)
+        self.production_step = _maybe_compile(_plateau_production_step, self.backend)
 
     def _init_states(self, n_grid: int) -> Tuple[torch.Tensor, ...]:
-        """S1: Unsaturated, S2: Saturated"""
-        S1 = (
-            torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
-        )
-        S2 = (
-            torch.zeros((n_grid, self.nmul), device=self.device) + self.nearzero
-        )
-        return (S1, S2)
+        z = torch.zeros((n_grid, 1), device=self.device) + self.nearzero
+        return (z.clone(), z.clone())
 
-    def _run_model(
-        self,
-        x_dict: dict,
-        states: Tuple[torch.Tensor, ...],
-        static_params: Dict[str, torch.Tensor],
-    ) -> Dict[str, torch.Tensor]:
+    def _run_model(self, x_dict, states, params_dict):
         forcing = x_dict["x_phy"]
         n_steps, n_grid = forcing.shape[:2]
-        nmul = self.nmul
         nearzero = self.nearzero
 
-        # Unbind forcing
-        P_seq = forcing[..., 0:1].expand(-1, -1, nmul).unbind(0)
-        # T_seq unused
-        PET_seq = forcing[..., 2:3].expand(-1, -1, nmul).unbind(0)
+        P_seq   = forcing[..., 0:1].unbind(0)
+        PET_seq = forcing[..., 2:3].unbind(0)
 
-        # Unpack Parameters
-        fmax = static_params["fmax"]
-        dp = static_params["dp"]
-        sumax = static_params["sumax"]
-        lp = static_params["lp"]
-        p_coeff = static_params["p_coeff"]
-        tp = static_params["tp"]
-        c_rise = static_params["c_rise"]
-        kp = static_params["kp"]
+        fmax    = params_dict["fmax"]
+        dp      = params_dict["dp"]
+        sumax   = params_dict["sumax"]
+        lp      = params_dict["lp"]
+        p_coeff = params_dict["p_coeff"]
+        tp      = params_dict["tp"]
+        c_rise  = params_dict["c_rise"]
+        kp      = params_dict["kp"]
 
-        S1, S2 = states
+        def warmup_step(t, curr):
+            S1, S2 = curr
+            _, _, _, S1_new, S2_new = self.production_step(
+                P_seq[t], PET_seq[t], S1, S2,
+                fmax, dp, sumax, lp, p_coeff, c_rise, kp, nearzero)
+            return (S1_new, S2_new)
 
-        track_balance = self.check_water_balance
-        if track_balance:
-            Et_out = torch.empty(
-                (n_steps, n_grid, nmul), device=self.device, dtype=torch.float32
-            )
-            state_series: Optional[List[torch.Tensor]] = [
-                torch.empty(
-                    (n_steps + 1, n_grid, nmul),
-                    device=self.device,
-                    dtype=torch.float32,
-                )
-                for _ in range(2)
-            ]
-            state_series[0][0] = S1
-            state_series[1][0] = S2
-            S_init_sum = torch.stack([s.clone() for s in states]).sum(dim=0)
-        else:
-            Et_out = None
-            state_series = None
-            S_init_sum = None
+        S1, S2 = self._run_warmup(warmup_step, n_steps, states)
 
-        # ==========================================================
-        # Phase 1: Production Loop
-        # ==========================================================
-        raw_pie_list = []  # Surface runoff (needs routing)
-        raw_qpgw_list = []  # Baseflow (direct)
-        # ea_list = []
-
+        pie_list, qpgw_list = [], []
         for t in range(n_steps):
-            flux_pie, flux_qpgw, flux_ea, S1, S2 = self.production_step(
-                P_seq[t],
-                PET_seq[t],
-                S1,
-                S2,
-                fmax,
-                dp,
-                sumax,
-                lp,
-                p_coeff,
-                c_rise,
-                kp,
-                nearzero,
-            )
-            raw_pie_list.append(flux_pie)
-            raw_qpgw_list.append(flux_qpgw)
-            if track_balance:
-                Et_out[t] = flux_ea
-                state_series[0][t + 1] = S1
-                state_series[1][t + 1] = S2
+            flux_pie, flux_qpgw, _, S1, S2 = self.production_step(
+                P_seq[t], PET_seq[t], S1, S2,
+                fmax, dp, sumax, lp, p_coeff, c_rise, kp, nearzero)
+            pie_list.append(flux_pie)
+            qpgw_list.append(flux_qpgw)
 
-        # Stack: (T, B, M)
-        pie_stack = torch.stack(raw_pie_list, dim=0)
-        qpgw_stack = torch.stack(raw_qpgw_list, dim=0)
+        B = n_grid
+        routed_pie = self.uh_surface(
+            torch.stack(pie_list, 0).permute(1, 2, 0).reshape(B, n_steps), tp.reshape(B, 1)
+        ).view(n_grid, 1, n_steps).permute(2, 0, 1)
 
-        # ==========================================================
-        # Phase 2: Convolution (Surface Runoff Only)
-        # ==========================================================
-        # 1. Flatten for Conv1d: (B*M, T)
-        B_total = n_grid * nmul
-        pie_flat = pie_stack.permute(1, 2, 0).reshape(B_total, n_steps)
-
-        # 2. UH Params: (B*M, 1)
-        tp_flat = tp.reshape(B_total, 1)
-
-        # 3. Apply Convolution
-        routed_pie_flat = self.uh_surface(pie_flat, tp_flat)
-
-        # 4. Reshape back: (T, B, M)
-        routed_pie = routed_pie_flat.view(n_grid, nmul, n_steps).permute(
-            2, 0, 1
-        )
-
-        # ==========================================================
-        # Phase 3: Aggregation
-        # ==========================================================
-        # Q = Routed Surface + Baseflow
-        Qsim_out = routed_pie + qpgw_stack
-        final_states = (S1, S2)
-
-        if track_balance:
-            return self._finalize_output(
-                Qsim_out,
-                Et_out,
-                S_init_sum,
-                final_states,
-                state_series,
-            )
-
-        return self._finalize_output(Qsim_out)
+        return self._finalize_output(routed_pie + torch.stack(qpgw_list, 0), params_dict)

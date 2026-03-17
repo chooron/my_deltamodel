@@ -85,7 +85,7 @@ def main():
 
     # 评估
     config["mode"] = "test"
-    config["test"]["test_epoch"] = 100
+    config["test"]["test_epoch"] = config["train"]["epochs"]
     set_randomseed(config["random_seed"])
     model = ModelHandler(config, verbose=True)
     data_loader_cls = import_data_loader(config["data_loader"])

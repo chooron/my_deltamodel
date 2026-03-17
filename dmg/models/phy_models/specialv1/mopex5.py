@@ -70,37 +70,22 @@ class Mopex5(UnifyV1):
         tc = static_params["tc"]
 
         S1, S2, Sc1, Sc2, Sn = states
+        warm_up = min(self.warm_up, n_steps)
+
+        with torch.no_grad():
+            for t in range(warm_up):
+                _, _, S1, S2, Sc1, Sc2, Sn = self.model_step(
+                    P_seq[t], T_seq[t], PET_seq[t], doy_seq[t],
+                    tcrit, ddf, Sb1, tw, alpha, is_time, tmin, trange,
+                    tu, Se, Sb2, tc, S1, S2, Sc1, Sc2, Sn, nearzero=nearzero)
+        S1, S2, Sc1, Sc2, Sn = (s.detach() for s in (S1, S2, Sc1, Sc2, Sn))
 
         q_list = []
-
-        for t in range(n_steps):
-            Qsim, flux_ea, S1, S2, Sc1, Sc2, Sn = self.model_step(
-                P_seq[t],
-                T_seq[t],
-                PET_seq[t],
-                doy_seq[t],
-                tcrit,
-                ddf,
-                Sb1,
-                tw,
-                alpha,
-                is_time,
-                tmin,
-                trange,
-                tu,
-                Se,
-                Sb2,
-                tc,
-                S1,
-                S2,
-                Sc1,
-                Sc2,
-                Sn,
-                nearzero=nearzero,
-            )
+        for t in range(warm_up, n_steps):
+            Qsim, _, S1, S2, Sc1, Sc2, Sn = self.model_step(
+                P_seq[t], T_seq[t], PET_seq[t], doy_seq[t],
+                tcrit, ddf, Sb1, tw, alpha, is_time, tmin, trange,
+                tu, Se, Sb2, tc, S1, S2, Sc1, Sc2, Sn, nearzero=nearzero)
             q_list.append(Qsim)
 
-        Qsim_out = torch.stack(q_list, dim=0)
-
-        warm_up = min(self.warm_up, n_steps)
-        return {"streamflow": Qsim_out[warm_up:].flatten(start_dim=1)}
+        return {"streamflow": torch.stack(q_list, dim=0).flatten(start_dim=1)}

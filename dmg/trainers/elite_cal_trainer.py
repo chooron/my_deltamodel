@@ -83,9 +83,14 @@ class EliteCalTrainer(CalTrainer):
         # reshape pred -> [T, n_basins, nmul]
         pred_full = pred_full.view(T, n_basins, nmul)
 
-        # 裁剪 warm-up 段（与 calc_metrics 对齐）
-        pred_full = pred_full[warm_up:].numpy()   # [T', n_basins, nmul]
-        tgt_np = tgt_full[warm_up:].numpy()       # [T', n_basins]
+        # pred 已由模型内部裁掉 warm-up，tgt 需手动裁剪对齐
+        pred_np = pred_full.numpy()                    # [T-warm_up, n_basins, nmul]
+        tgt_np = tgt_full[warm_up:].numpy()            # [T-warm_up, n_basins]
+
+        # 防止长度仍不一致（边界情况），取最短对齐
+        min_len = min(pred_np.shape[0], tgt_np.shape[0])
+        pred_full = pred_np[:min_len]
+        tgt_np = tgt_np[:min_len]
 
         T_valid, n_basins, _ = pred_full.shape
         kge_matrix = np.full((n_basins, nmul), np.nan)

@@ -59,7 +59,7 @@ delta_model:
     - pet
     model:
     - UnifyV2
-    model_name: mopex4
+    model_name: collie1
     nearzero: 1e-6
     nmul: 1
     use_log_norm: []
