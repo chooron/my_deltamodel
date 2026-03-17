@@ -207,12 +207,19 @@ class Newzealand2(UnifyV1):
         d_delay = static_params["d_delay"]
 
         S1, S2 = states
+        warm_up = min(self.warm_up, n_steps)
+
+        with torch.no_grad():
+            for t in range(warm_up):
+                _, _, S1, S2 = self.production_step(
+                    P_seq[t], PET_seq[t], S1, S2,
+                    s1max, s2max, sfc_frac, m, a, b, tcbf, nearzero)
+        S1, S2 = S1.detach(), S2.detach()
 
         # ==========================================================
         # Phase 1: Production Loop
         # ==========================================================
         raw_q_total_list = []
-        # ea_list = []
 
         for t in range(n_steps):
             flux_q_total, flux_ea, S1, S2 = self.production_step(

@@ -195,6 +195,13 @@ class Ihacres(UnifyV1):
         tau_d = static_params["tau_d"]  # New parameter
 
         (S1,) = states
+        warm_up = min(self.warm_up, n_steps)
+
+        with torch.no_grad():
+            for t in range(warm_up):
+                _, _, _, S1 = self.production_step(
+                    P_seq[t], PET_seq[t], S1, lp, d, p, alpha, nearzero)
+        S1 = S1.detach()
 
         # ==========================================================
         # Phase 1: Production Loop

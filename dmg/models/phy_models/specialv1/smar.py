@@ -343,13 +343,20 @@ class Smar(UnifyV1):
         nk_delay = static_params["nk_delay"]  # nk (mean delay)
 
         S1, S2, S3, S4, S5, S6 = states
+        warm_up = min(self.warm_up, n_steps)
+
+        with torch.no_grad():
+            for t in range(warm_up):
+                _, _, _, S1, S2, S3, S4, S5, S6 = self.production_step(
+                    P_seq[t], PET_seq[t], S1, S2, S3, S4, S5, S6,
+                    h_runoff, y_inf, smax, c_evap, g_rech, kg, nearzero)
+        S1, S2, S3, S4, S5, S6 = (s.detach() for s in (S1, S2, S3, S4, S5, S6))
 
         # ==========================================================
         # Phase 1: Production Loop
         # ==========================================================
         raw_qr_list = []  # Surface runoff to route
         raw_qg_list = []  # Baseflow
-        # ea_list = []
 
         for t in range(n_steps):
             flux_qr_in, flux_qg, flux_ea, S1, S2, S3, S4, S5, S6 = (

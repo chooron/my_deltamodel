@@ -204,13 +204,20 @@ class Plateau(UnifyV1):
         kp = static_params["kp"]
 
         S1, S2 = states
+        warm_up = min(self.warm_up, n_steps)
+
+        with torch.no_grad():
+            for t in range(warm_up):
+                _, _, _, S1, S2 = self.production_step(
+                    P_seq[t], PET_seq[t], S1, S2,
+                    fmax, dp, sumax, lp, p_coeff, c_rise, kp, nearzero)
+        S1, S2 = S1.detach(), S2.detach()
 
         # ==========================================================
         # Phase 1: Production Loop
         # ==========================================================
         raw_pie_list = []  # Surface runoff (needs routing)
         raw_qpgw_list = []  # Baseflow (direct)
-        # ea_list = []
 
         for t in range(n_steps):
             flux_pie, flux_qpgw, flux_ea, S1, S2 = self.production_step(

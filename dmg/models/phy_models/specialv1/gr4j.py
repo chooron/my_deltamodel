@@ -166,6 +166,12 @@ class Gr4j(UnifyV1):
         x4 = static_params["x4"]
 
         S1, S2 = states
+        warm_up = min(self.warm_up, n_steps)
+
+        with torch.no_grad():
+            for t in range(warm_up):
+                _, _, S1 = self.production_step(P_seq[t], PET_seq[t], S1, x1, nearzero)
+        S1 = S1.detach()
 
         flux_pr_list = []
         e_phys_list = []

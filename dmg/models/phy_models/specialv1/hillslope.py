@@ -201,13 +201,20 @@ class Hillslope(UnifyV1):
         kh = static_params["kh"]
 
         S1, S2 = states
+        warm_up = min(self.warm_up, n_steps)
+
+        with torch.no_grad():
+            for t in range(warm_up):
+                _, _, _, S1, S2 = self.production_step(
+                    P_seq[t], PET_seq[t], S1, S2,
+                    dw, betaw, swmax, a, c_rad, kh, nearzero)
+        S1, S2 = S1.detach(), S2.detach()
 
         # ==========================================================
         # Phase 1: Production & Groundwater Loop
         # ==========================================================
-        raw_qses_list = [] # Surface runoff (needs routing)
-        raw_qhgw_list = [] # Baseflow (ready)
-        # ea_list = []
+        raw_qses_list = []  # Surface runoff (needs routing)
+        raw_qhgw_list = []  # Baseflow (ready)
 
         for t in range(n_steps):
             flux_qses, flux_qhgw, flux_ea, S1, S2 = self.production_step(
