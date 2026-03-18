@@ -169,7 +169,7 @@ class Plateau(UnifyV1):
         self.uh_surface = DplTri3(max_lag=int(PLATEAU_PARAMS_BOUNDS["tp"][1]))
         self.production_step = _maybe_compile(_plateau_production_step_impl, self.backend)
 
-    def _init_states(self, n_grid: int, nmul: int = None) -> Tuple[torch.Tensor, ...]:
+    def _init_states(self, n_grid: int, nmul: Optional[int] = None) -> Tuple[torch.Tensor, ...]:
         """S1: Unsaturated, S2: Saturated"""
         nmul = nmul or self.nmul
         S1 = torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
@@ -181,7 +181,7 @@ class Plateau(UnifyV1):
         x_dict: dict,
         states: Tuple[torch.Tensor, ...],
         static_params: Dict[str, torch.Tensor],
-        nmul: int = None,
+        nmul: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         forcing = x_dict["x_phy"]
         n_steps, n_grid = forcing.shape[:2]

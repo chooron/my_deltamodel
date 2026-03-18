@@ -166,7 +166,7 @@ class Hillslope(UnifyV1):
         self.uh_surface = DplTri3(max_lag=int(HILLSLOPE_PARAMS_BOUNDS["th"][1]))
         self.production_step = _maybe_compile(_hillslope_production_step_impl, self.backend)
 
-    def _init_states(self, n_grid: int, nmul: int = None) -> Tuple[torch.Tensor, ...]:
+    def _init_states(self, n_grid: int, nmul: Optional[int] = None) -> Tuple[torch.Tensor, ...]:
         """S1: Soil, S2: Groundwater"""
         nmul = nmul or self.nmul
         S1 = torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
@@ -178,7 +178,7 @@ class Hillslope(UnifyV1):
         x_dict: dict,
         states: Tuple[torch.Tensor, ...],
         static_params: Dict[str, torch.Tensor],
-        nmul: int = None,
+        nmul: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         forcing = x_dict["x_phy"]
         n_steps, n_grid = forcing.shape[:2]

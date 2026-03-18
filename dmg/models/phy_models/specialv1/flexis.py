@@ -224,7 +224,7 @@ class Flexis(UnifyV1):
         self.production_step = _maybe_compile(_flexis_production_step_impl, self.backend)
         self.routing_step = _maybe_compile(_flexis_routing_step_impl, self.backend)
 
-    def _init_states(self, n_grid: int, nmul: int = None) -> Tuple[torch.Tensor, ...]:
+    def _init_states(self, n_grid: int, nmul: Optional[int] = None) -> Tuple[torch.Tensor, ...]:
         """Initialize 5 states"""
         nmul = nmul or self.nmul
         S1 = torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
@@ -239,7 +239,7 @@ class Flexis(UnifyV1):
         x_dict: dict,
         states: Tuple[torch.Tensor, ...],
         static_params: Dict[str, torch.Tensor],
-        nmul: int = None,
+        nmul: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         forcing = x_dict["x_phy"]
         n_steps, n_grid = forcing.shape[:2]

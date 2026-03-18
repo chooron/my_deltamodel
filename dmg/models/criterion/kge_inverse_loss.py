@@ -137,6 +137,6 @@ class KgeInverseLoss(BaseCriterion):
         # Step D: Loss 输出
         # ---------------------------------------------------------------------
         # 目标是最大化 KGE，Loss = Sum(1 - KGE)
-        loss = (1.0 - kge_value).sum()
+        loss = (1.0 - kge_value).mean()
 
         return loss

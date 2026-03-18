@@ -122,8 +122,8 @@ class KgeLoss(BaseCriterion):
 
         # 8. 返回 Loss
         # 目标是最大化 KGE，即最小化 (1 - KGE)
-        # 使用 sum() 而不是 mean()，是因为在 Parameter 独立率定场景下，
-        # 我们希望每个流域的梯度强度是独立的，不被 Batch Size 稀释。
-        loss = (1.0 - kge).sum()
+        # 使用 mean() 对 batch 内各样本的 loss 取平均，
+        # 使梯度强度与 batch size 无关，训练更稳定。
+        loss = (1.0 - kge).mean()
 
         return loss

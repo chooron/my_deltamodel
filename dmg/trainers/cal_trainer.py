@@ -278,14 +278,13 @@ class CalTrainer(BaseTrainer):
             )
 
         # 训练开始摘要
-        nmul = self._get_nmul() if hasattr(self, "_get_nmul") else self.config["delta_model"]["phy_model"].get("nmul", 16)
         n_basins = self.train_dataset["xc_nn_norm"].shape[1]
         optimizer_name = self.config["train"]["optimizer"]
         lr = self.config["train"]["learning_rate"]
         scheduler_name = self.config["delta_model"]["nn_model"].get("lr_scheduler", "None")
         self._emit_progress(
             f"[Train Start] epochs={self.epochs} | optimizer={optimizer_name} | lr={lr} | "
-            f"scheduler={scheduler_name} | n_basins={n_basins} | nmul={nmul}"
+            f"scheduler={scheduler_name} | n_basins={n_basins}"
         )
         sys.stdout.flush()
         sys.stderr.flush()
@@ -339,14 +338,11 @@ class CalTrainer(BaseTrainer):
         self.total_loss = 0.0
         self.model.loss_dict = {key: 0.0 for key in self.model.loss_dict}
 
-        # 获取实际的 num_start：优先从模型属性读取（自适应计算后的值），回退到 config
+        # 获取实际的 num_start：仅从模型属性读取，否则自然报错
         model_name = self.config["delta_model"]["phy_model"]["model"]
         _model_name = model_name[0] if isinstance(model_name, list) else model_name
         _nn = getattr(self.model.model_dict.get(_model_name, None), "nn_model", None)
-        if _nn is not None and hasattr(_nn, "num_start"):
-            nmul = _nn.num_start
-        else:
-            nmul = self.config["delta_model"]["phy_model"].get("nmul", 16)
+        num_start = _nn.num_start
 
         # Iterate through epoch in minibatches.
         # 彻底禁用 tqdm 进度条，避免控制字符污染日志文件
@@ -362,10 +358,10 @@ class CalTrainer(BaseTrainer):
             # ============================================================
             # [核心修改] 仅在 Multi-Start 时对 Target 进行复制
             # ============================================================
-            if nmul > 1:
+            if num_start > 1:
                 dataset_sample["target"] = dataset_sample[
                     "target"
-                ].repeat_interleave(nmul, dim=1)
+                ].repeat_interleave(num_start, dim=1)
             # ============================================================
 
             # Forward pass through model.
@@ -429,7 +425,7 @@ class CalTrainer(BaseTrainer):
         # 统计信息已由 _log_epoch_stats 每个 epoch 输出一次
 
         # 记录 final_loss 供 Train End 摘要使用
-        self._final_loss = self.total_loss / max(n_minibatch, 1) / nmul
+        self._final_loss = self.total_loss / max(n_minibatch, 1)
 
         self._log_epoch_stats(
             epoch, self.model.loss_dict, n_minibatch, start_time
@@ -469,14 +465,11 @@ class CalTrainer(BaseTrainer):
         model_name = self.config["delta_model"]["phy_model"]["model"]
         _model_name = model_name[0] if isinstance(model_name, list) else model_name
         _nn = getattr(self.model.model_dict.get(_model_name, None), "nn_model", None)
-        if _nn is not None and hasattr(_nn, "num_start"):
-            nmul = _nn.num_start
-        else:
-            nmul = self.config["delta_model"]["phy_model"].get("nmul", 16)
+        num_start = _nn.num_start
 
         observations = dataset["target"]
-        if nmul > 1:
-            observations = observations.repeat_interleave(nmul, dim=1)
+        if num_start > 1:
+            observations = observations.repeat_interleave(num_start, dim=1)
 
         n_samples = dataset["xc_nn_norm"].shape[1]
         batch_start = np.arange(0, n_samples, self.config["test"]["batch_size"])

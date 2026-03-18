@@ -9,7 +9,7 @@ Unified Hydrological Model V2 (Warmup-Optimized, nmul=1)
 - 保留水量平衡检测（默认关闭）
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -146,15 +146,12 @@ class UnifyV2(nn.Module):
         curr_states = states
 
         # ── Warmup: no_grad ──────────────────────────────────────────
-        warmup_outputs: List[torch.Tensor] = []
         with torch.no_grad():
             for t in range(effective_warmup):
                 out = self.step_fn(
                     P_seq[t], T_seq[t], PET_seq[t],
                     *param_values, *curr_states, self.nearzero,
                 )
-                if self.warm_up_states:
-                    warmup_outputs.append(out[0])
                 curr_states = out[2:]
 
         curr_states = tuple(s.detach() for s in curr_states)
@@ -173,14 +170,7 @@ class UnifyV2(nn.Module):
             train_out[i] = out[0]
             curr_states = out[2:]
 
-        if self.warm_up_states and warmup_outputs:
-            Qsim_out = torch.cat(
-                [torch.stack(warmup_outputs, dim=0), train_out], dim=0
-            )
-        else:
-            Qsim_out = train_out
-
-        return self._finalize_output(Qsim_out, params_dict)
+        return self._finalize_output(train_out, params_dict)
 
     def _run_warmup(
         self,

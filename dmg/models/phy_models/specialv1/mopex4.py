@@ -34,7 +34,7 @@ class Mopex4(UnifyV1):
         super().__init__(config, device, backend)
         self.model_step = _maybe_compile(mopex4_step, self.backend)
 
-    def _init_states(self, n_grid: int, nmul: int = None) -> Tuple[torch.Tensor, ...]:
+    def _init_states(self, n_grid: int, nmul: Optional[int] = None) -> Tuple[torch.Tensor, ...]:
         # S1, S2, Sc1, Sc2, Sn
         return create_initial_state(n_grid, nmul or self.nmul, self.device, self.nearzero)
 

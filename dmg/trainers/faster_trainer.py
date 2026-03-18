@@ -345,7 +345,7 @@ class FasterTrainer(BaseTrainer):
         n_timesteps_full = dataset["x_phy"].shape[0]
         warm_up = self.config["delta_model"]["phy_model"]["warm_up"]
 
-        # 实际输出的时间步数（排除 warmup）
+        # actual output timesteps (model no longer includes warmup)
         n_timesteps_output = n_timesteps_full - warm_up
         n_params = nn_model.ny
 
@@ -413,10 +413,8 @@ class FasterTrainer(BaseTrainer):
         if predictions.ndim == 2 and obs_np.ndim == 3:
             obs_np = obs_np.squeeze(-1)
 
-        # 移除 warmup（如果 target 包含 warmup）
-        warm_up = self.config["delta_model"]["phy_model"]["warm_up"]
         if obs_np.shape[0] > predictions.shape[0]:
-            obs_np = obs_np[warm_up:warm_up + predictions.shape[0], :]
+            obs_np = obs_np[:predictions.shape[0], :]
 
         # 创建 Metrics 对象
         metrics_calc = Metrics(
@@ -642,9 +640,7 @@ class FasterTrainer(BaseTrainer):
                     }
                     prediction_window = self.model(time_window_input, eval=True)
                     prediction_valid_part = {
-                        key: tensor[warmup_length:, ...].cpu().detach()
-                        if tensor.shape[0] > warmup_length
-                        else tensor.cpu().detach()
+                        key: tensor.cpu().detach()
                         for key, tensor in prediction_window.items()
                     }
                     prediction_time_chunks.append(prediction_valid_part)
@@ -675,7 +671,6 @@ class FasterTrainer(BaseTrainer):
         predictions = self._batch_data(batch_predictions, target_name)
         target = np.expand_dims(observations[:, :, 0].cpu().numpy(), 2)
 
-        target = target[self.config["delta_model"]["phy_model"]["warm_up"] :, :]
         target = target[: len(predictions), :]
 
         # 从配置中获取要计算的指标列表

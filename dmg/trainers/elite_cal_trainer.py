@@ -16,7 +16,7 @@ class EliteCalTrainer(CalTrainer):
     实现梯度下降与进化算法的混合优化策略。
     """
 
-    def _get_nmul(self) -> int:
+    def _get_num_start(self) -> int:
         """从模型中读取实际的 num_start（成员数）。"""
         model_name = self.config["delta_model"]["phy_model"]["model"]
         _model_name = model_name[0] if isinstance(model_name, list) else model_name
@@ -25,7 +25,6 @@ class EliteCalTrainer(CalTrainer):
             _nn = getattr(_dpl_model, "nn_model", None)
             if _nn is not None and hasattr(_nn, "num_start"):
                 return _nn.num_start
-        # 如果无法从模型获取，抛出异常而不是使用配置值
         raise RuntimeError(
             f"无法从模型 {_model_name} 中获取 num_start。"
             "请确保模型已正确初始化且 nn_model 具有 num_start 属性。"
@@ -38,9 +37,9 @@ class EliteCalTrainer(CalTrainer):
         Returns
         -------
         np.ndarray
-            shape=(n_basins, nmul) 的 KGE 矩阵，无效值填 np.nan。
+            shape=(n_basins, num_start) 的 KGE 矩阵，无效值填 np.nan。
         """
-        nmul = self._get_nmul()
+        num_start = self._get_num_start()
         warm_up = self.config["delta_model"]["phy_model"]["warm_up"]
         target_name = self.config["train"]["target"][0]
 
@@ -50,8 +49,8 @@ class EliteCalTrainer(CalTrainer):
         batch_start = np.arange(0, n_samples, batch_size)
         batch_end = np.append(batch_start[1:], n_samples)
 
-        # 收集所有 batch 的预测结果（shape: [T, B*nmul] 拼接后再整理）
-        all_preds = []   # 每个元素 shape: [T, b*nmul] 或 [T, b, nmul]
+        # 收集所有 batch 的预测结果（shape: [T, B*num_start] 拼接后再整理）
+        all_preds = []   # 每个元素 shape: [T, b*num_start] 或 [T, b, num_start]
         all_targets = []  # 每个元素 shape: [T, b]
 
         with torch.no_grad():
@@ -61,10 +60,10 @@ class EliteCalTrainer(CalTrainer):
                 )
                 prediction = self.model(sample, eval=True)
 
-                # 取目标变量预测值，shape: [T, b*nmul] 或 [T, b, nmul]
+                # 取目标变量预测值，shape: [T, b*num_start] 或 [T, b, num_start]
                 model_name = self.config["delta_model"]["phy_model"]["model"]
                 _model_name = model_name[0] if isinstance(model_name, list) else model_name
-                pred_tensor = prediction[target_name]  # [T, b*nmul]
+                pred_tensor = prediction[target_name]  # [T, b*num_start]
 
                 # target shape: [T, b, 1] -> [T, b]
                 tgt = sample["target"][..., 0]  # [T, b]
@@ -73,18 +72,18 @@ class EliteCalTrainer(CalTrainer):
                 all_targets.append(tgt.cpu().float())
 
         # 拼接所有 batch：沿流域维度 (dim=1)
-        # pred: [T, n_basins * nmul]，target: [T, n_basins]
-        pred_full = torch.cat(all_preds, dim=1)    # [T, n_basins*nmul]
+        # pred: [T, n_basins * num_start]，target: [T, n_basins]
+        pred_full = torch.cat(all_preds, dim=1)    # [T, n_basins*num_start]
         tgt_full = torch.cat(all_targets, dim=1)   # [T, n_basins]
 
         T, total_cols = pred_full.shape
         n_basins = tgt_full.shape[1]
 
-        # reshape pred -> [T, n_basins, nmul]
-        pred_full = pred_full.view(T, n_basins, nmul)
+        # reshape pred -> [T, n_basins, num_start]
+        pred_full = pred_full.view(T, n_basins, num_start)
 
         # pred 已由模型内部裁掉 warm-up，tgt 需手动裁剪对齐
-        pred_np = pred_full.numpy()                    # [T-warm_up, n_basins, nmul]
+        pred_np = pred_full.numpy()                    # [T-warm_up, n_basins, num_start]
         tgt_np = tgt_full[warm_up:].numpy()            # [T-warm_up, n_basins]
 
         # 防止长度仍不一致（边界情况），取最短对齐
@@ -93,13 +92,13 @@ class EliteCalTrainer(CalTrainer):
         tgt_np = tgt_np[:min_len]
 
         T_valid, n_basins, _ = pred_full.shape
-        kge_matrix = np.full((n_basins, nmul), np.nan)
+        kge_matrix = np.full((n_basins, num_start), np.nan)
 
         for b in range(n_basins):
             t_b = tgt_np[:, b]  # [T']
             valid_t = ~np.isnan(t_b)
 
-            for m in range(nmul):
+            for m in range(num_start):
                 p_m = pred_full[:, b, m]  # [T']
                 valid_p = ~np.isnan(p_m)
                 valid = valid_t & valid_p
@@ -144,7 +143,7 @@ class EliteCalTrainer(CalTrainer):
         Parameters
         ----------
         kge_matrix : np.ndarray
-            shape=(n_basins, nmul)，由 _compute_member_kge 返回。
+            shape=(n_basins, num_start)，由 _compute_member_kge 返回。
         threshold_ratio : float
             后 threshold_ratio 比例的成员被视为差成员，默认 0.25。
         elite_ratio : float
@@ -155,7 +154,7 @@ class EliteCalTrainer(CalTrainer):
         dict
             重置统计信息字典。
         """
-        n_basins, nmul = kge_matrix.shape
+        n_basins, num_start = kge_matrix.shape
 
         # 获取 Calibrate 模块的 params
         model_name = self.config["delta_model"]["phy_model"]["model"]
@@ -163,14 +162,13 @@ class EliteCalTrainer(CalTrainer):
         _dpl_model = self.model.model_dict.get(_model_name)
         params = _dpl_model.nn_model.params  # 访问 Calibrate 的 logit 域参数
 
-        # 自适应噪声尺度：根据参数 ny 维度计算
-        # params shape: (n_basins, ny, nmul)
-        ny = params.shape[1]
-        noise_scale = 0.1 / np.sqrt(ny)
+        # 噪声尺度：logit 域 std ≈ 1.34，取约 3% 作为扰动
+        # params shape: (n_basins, ny, num_start)
+        noise_scale = 0.05
 
         # 计算精英池和差成员的数量
-        n_elite = max(1, int(nmul * elite_ratio))
-        n_poor = max(1, int(nmul * threshold_ratio))
+        n_elite = max(1, int(num_start * elite_ratio))
+        n_poor = max(1, int(num_start * threshold_ratio))
 
         n_reset_total = 0
         n_actually_reset = 0
@@ -180,7 +178,7 @@ class EliteCalTrainer(CalTrainer):
 
         with torch.no_grad():
             for b in range(n_basins):
-                kge_b = kge_matrix[b]  # [nmul]
+                kge_b = kge_matrix[b]  # [num_start]
 
                 # NaN 视为最差：用 -inf 替换 NaN 后排序
                 kge_b_filled = np.where(np.isnan(kge_b), -np.inf, kge_b)
@@ -204,22 +202,8 @@ class EliteCalTrainer(CalTrainer):
                 if valid_poor.size > 0:
                     poor_kge_list.append(float(np.median(valid_poor)))
 
-                # 精英池 KGE 中位数，用于自适应跳过判断
-                elite_kge_median = float(np.nanmedian(kge_b[elite_idx]))
-                # 自适应差距阈值：精英中位数的 50%
-                gap_threshold = elite_kge_median * 0.5
-
                 # 对每个差成员：随机采样一个精英作为 donor，加噪声
                 for poor_m in poor_idx:
-                    poor_kge = kge_b[poor_m]
-                    # NaN 成员视为差距足够大，直接重置
-                    poor_kge_val = poor_kge if not np.isnan(poor_kge) else -np.inf
-
-                    # 差距不够大说明仍在正常收敛，跳过不重置
-                    if (elite_kge_median - poor_kge_val) < gap_threshold:
-                        n_reset_total += 1  # 计入计划重置数
-                        continue
-
                     # 随机选取一个精英 donor（避免所有差成员聚集到同一局部最优）
                     donor_m = int(np.random.choice(elite_idx))
 
@@ -227,6 +211,13 @@ class EliteCalTrainer(CalTrainer):
                     donor_params = params.data[b, :, donor_m].clone()  # [ny]
                     noise = torch.randn_like(donor_params) * noise_scale
                     params.data[b, :, poor_m] = donor_params + noise
+
+                    # 清除该成员对应的 Adam 动量，防止旧动量把新参数拉回原位
+                    if params in self.optimizer.state:
+                        state = self.optimizer.state[params]
+                        for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+                            if key in state:
+                                state[key][b, :, poor_m] = 0.0
 
                     n_reset_total += 1
                     n_actually_reset += 1
@@ -260,14 +251,43 @@ class EliteCalTrainer(CalTrainer):
             threshold_ratio = self.config["train"].get("elite_threshold_ratio", 0.25)
             elite_ratio = self.config["train"].get("elite_ratio", 0.10)
 
-            self._emit_progress(f"[Epoch {epoch}] 开始精英变异评估...")
-            kge_matrix = self._compute_member_kge()
-            stats = self._reset_poor_members(kge_matrix, threshold_ratio, elite_ratio)
+            num_start = self._get_num_start()
+            n_elite = max(1, int(num_start * elite_ratio))
+            n_poor = max(1, int(num_start * threshold_ratio))
+            self._emit_progress(
+                f"[Epoch {epoch}] 精英变异开始 | "
+                f"num_start={num_start} | n_elite={n_elite} | n_poor={n_poor}"
+            )
+
+            kge_matrix_before = self._compute_member_kge()
+            global_kge_before = float(np.nanmedian(kge_matrix_before))
+            stats = self._reset_poor_members(kge_matrix_before, threshold_ratio, elite_ratio)
+            kge_matrix_after = self._compute_member_kge()
+            global_kge_after = float(np.nanmedian(kge_matrix_after))
+
+            # 变异后精英/差成员KGE统计
+            n_basins = kge_matrix_after.shape[0]
+            elite_after_list = []
+            poor_after_list = []
+            for b in range(n_basins):
+                kge_b = kge_matrix_after[b]
+                kge_b_filled = np.where(np.isnan(kge_b), -np.inf, kge_b)
+                sorted_idx = np.argsort(kge_b_filled)[::-1]
+                elite_vals = kge_b[sorted_idx[:n_elite]]
+                poor_vals = kge_b[sorted_idx[-n_poor:]]
+                valid_e = elite_vals[~np.isnan(elite_vals)]
+                valid_p = poor_vals[~np.isnan(poor_vals)]
+                if valid_e.size > 0:
+                    elite_after_list.append(float(np.median(valid_e)))
+                if valid_p.size > 0:
+                    poor_after_list.append(float(np.median(valid_p)))
+            elite_kge_after = float(np.median(elite_after_list)) if elite_after_list else float("nan")
+            poor_kge_after = float(np.median(poor_after_list)) if poor_after_list else float("nan")
 
             self._emit_progress(
-                f"[Epoch {epoch:>4}/{self.epochs}] 精英变异 | "
-                f"计划重置={stats['n_reset_total']} | 实际重置={stats['n_actually_reset']} | "
-                f"跳过（收敛中）={stats['n_reset_total'] - stats['n_actually_reset']} | "
-                f"精英KGE={stats['elite_kge_median']:.4f} | "
-                f"全局最优KGE={stats['global_best_kge']:.4f}"
+                f"[Epoch {epoch:>4}/{self.epochs}] 精英变异完成 | "
+                f"重置参数组={stats['n_actually_reset']} | "
+                f"全局KGE: {global_kge_before:.4f} -> {global_kge_after:.4f} | "
+                f"精英KGE: {stats['elite_kge_median']:.4f} -> {elite_kge_after:.4f} | "
+                f"差成员KGE: {stats['poor_kge_median']:.4f} -> {poor_kge_after:.4f}"
             )
