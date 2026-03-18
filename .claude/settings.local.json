@@ -37,7 +37,9 @@
       "Bash(echo \"$f: readable\")",
       "Bash(git checkout:*)",
       "Bash(grep -n \"no_grad\\\\|warm_up\\\\|detach\" /workspace/my_deltamodel/dmg/models/phy_models/specialv1/*.py)",
-      "Bash(bash project/diff_compare/run_calibrations_common_parallel.sh)"
+      "Bash(bash project/diff_compare/run_calibrations_common_parallel.sh)",
+      "Bash(bash run_alpha_experiments.sh)",
+      "Bash(python -c \":*)"
     ]
   }
 }

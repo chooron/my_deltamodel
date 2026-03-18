@@ -217,6 +217,7 @@ class NewTrainer(BaseTrainer):
                 self.optimizer.zero_grad()
                 continue
 
+            self._emit_progress(f"  [Epoch {epoch} Batch {mb}/{n_minibatch}] loss={loss.item():.4f}")
             loss.backward()
 
             for param in self.model.get_parameters():

@@ -82,7 +82,7 @@ class FlexMopexV1(nn.Module):
 
     def _setup_compiled_kernels(self) -> None:
         """使用 torch.compile 编译 mopex_step 函数"""
-        self.mopex_step_compiled = torch.compile(mopex_core.mopex_step)
+        self.mopex_step_compiled = mopex_core.mopex_step
 
     def _descale_params(
         self,
@@ -276,20 +276,22 @@ class FlexMopexV1(nn.Module):
 
         # ── 训练段：正常建图 ──────────────────────────────────────────────
         n_train = n_steps - effective_warmup
-        Q_out = torch.zeros(n_train, n_grid, self.nmul, device=self.device)
-        ET_out = torch.zeros(n_train, n_grid, self.nmul, device=self.device)
+        Q_list = []
+        ET_list = []
 
         for i in range(n_train):
             t = effective_warmup + i
             Q, ET, S1, S2, Sc1, Sc2, Sn = _step(t)
-            Q_out[i] = Q
-            ET_out[i] = ET
+            Q_list.append(Q)
+            ET_list.append(ET)
             states["S1"] = S1
             states["S2"] = S2
             states["Sc1"] = Sc1
             states["Sc2"] = Sc2
             states["Sn"] = Sn
 
+        Q_out = torch.stack(Q_list, dim=0)
+        ET_out = torch.stack(ET_list, dim=0)
         return Q_out, ET_out
 
     def forward(
@@ -359,16 +361,9 @@ class FlexMopexV1(nn.Module):
         # 应用路由（使用实际训练步数）
         Qrouted = self._apply_routing(Q_mean, n_train, n_grid)
 
-        # target 截掉 warmup 对齐
-        effective_warmup = n_steps - n_train
-        target = x_dict["target"]
-        if effective_warmup > 0:
-            target = target[effective_warmup:]
-
         # 构造返回字典
         result: Dict[str, torch.Tensor] = {
             "streamflow": Qrouted,
-            "target": target,
         }
 
         # save weights - 扩展到 [n_train, n_grid, 1] 以便保存
@@ -376,11 +371,5 @@ class FlexMopexV1(nn.Module):
             result[weight_name] = (
                 weights[weight_name].unsqueeze(0).repeat(n_train, 1, 1)
             ).permute(0, 2, 1)
-
-        # 截断warmup（warm_up_states=False 时的旧逻辑，现已由 no_grad 段替代，保留兼容）
-        if not self.warm_up_states:
-            for key in result:
-                if result[key] is not None:
-                    result[key] = result[key][self.pred_cutoff:]
 
         return result
