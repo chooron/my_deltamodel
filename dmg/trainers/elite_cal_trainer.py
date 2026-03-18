@@ -70,11 +70,13 @@ class EliteCalTrainer(CalTrainer):
 
                 all_preds.append(pred_tensor.cpu().float())
                 all_targets.append(tgt.cpu().float())
+                del sample, prediction, pred_tensor, tgt
 
         # 拼接所有 batch：沿流域维度 (dim=1)
         # pred: [T, n_basins * num_start]，target: [T, n_basins]
         pred_full = torch.cat(all_preds, dim=1)    # [T, n_basins*num_start]
         tgt_full = torch.cat(all_targets, dim=1)   # [T, n_basins]
+        del all_preds, all_targets
 
         T, total_cols = pred_full.shape
         n_basins = tgt_full.shape[1]
@@ -85,21 +87,23 @@ class EliteCalTrainer(CalTrainer):
         # pred 已由模型内部裁掉 warm-up，tgt 需手动裁剪对齐
         pred_np = pred_full.numpy()                    # [T-warm_up, n_basins, num_start]
         tgt_np = tgt_full[warm_up:].numpy()            # [T-warm_up, n_basins]
+        del pred_full, tgt_full
 
         # 防止长度仍不一致（边界情况），取最短对齐
         min_len = min(pred_np.shape[0], tgt_np.shape[0])
-        pred_full = pred_np[:min_len]
-        tgt_np = tgt_np[:min_len]
+        pred_aligned = pred_np[:min_len]
+        tgt_aligned = tgt_np[:min_len]
+        del pred_np, tgt_np
 
-        T_valid, n_basins, _ = pred_full.shape
+        T_valid, n_basins, _ = pred_aligned.shape
         kge_matrix = np.full((n_basins, num_start), np.nan)
 
         for b in range(n_basins):
-            t_b = tgt_np[:, b]  # [T']
+            t_b = tgt_aligned[:, b]  # [T']
             valid_t = ~np.isnan(t_b)
 
             for m in range(num_start):
-                p_m = pred_full[:, b, m]  # [T']
+                p_m = pred_aligned[:, b, m]  # [T']
                 valid_p = ~np.isnan(p_m)
                 valid = valid_t & valid_p
 
@@ -211,6 +215,7 @@ class EliteCalTrainer(CalTrainer):
                     donor_params = params.data[b, :, donor_m].clone()  # [ny]
                     noise = torch.randn_like(donor_params) * noise_scale
                     params.data[b, :, poor_m] = donor_params + noise
+                    del donor_params, noise
 
                     # 清除该成员对应的 Adam 动量，防止旧动量把新参数拉回原位
                     if params in self.optimizer.state:
@@ -262,6 +267,8 @@ class EliteCalTrainer(CalTrainer):
             kge_matrix_before = self._compute_member_kge()
             global_kge_before = float(np.nanmedian(kge_matrix_before))
             stats = self._reset_poor_members(kge_matrix_before, threshold_ratio, elite_ratio)
+            del kge_matrix_before
+            torch.cuda.empty_cache()
             kge_matrix_after = self._compute_member_kge()
             global_kge_after = float(np.nanmedian(kge_matrix_after))
 
@@ -281,6 +288,8 @@ class EliteCalTrainer(CalTrainer):
                     elite_after_list.append(float(np.median(valid_e)))
                 if valid_p.size > 0:
                     poor_after_list.append(float(np.median(valid_p)))
+            del kge_matrix_after
+            torch.cuda.empty_cache()
             elite_kge_after = float(np.median(elite_after_list)) if elite_after_list else float("nan")
             poor_kge_after = float(np.median(poor_after_list)) if poor_after_list else float("nan")
 
