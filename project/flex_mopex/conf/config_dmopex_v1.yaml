@@ -8,7 +8,7 @@ device: cuda
 gpu_id: 0
 data_loader: HydroLoader
 data_sampler: HydroSampler
-trainer: Trainer
+trainer: NewTrainer
 save_output: true
 save_path: project/flex_mopex/output/flex_mopex_v1/alpha_0.006
 trained_model: project/flex_mopex/output/flex_mopex_v1/alpha_0.006/model/

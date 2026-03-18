@@ -58,130 +58,115 @@ def mopex_step(
     torch.Tensor,
 ]:
     # ============================================================
-    # 0. Guards - 在开始就保护所有状态和参数（参考mopex5.py）
+    # 0. Guards
     # ============================================================
-    S1 = F.relu(S1)
-    S2 = F.relu(S2)
+    S1  = F.relu(S1)
+    S2  = F.relu(S2)
     Sc1 = F.relu(Sc1)
     Sc2 = F.relu(Sc2)
-    Sn = F.relu(Sn)
-
-    # Sb1 = torch.clamp(Sb1, min=nearzero)
-    # tw = torch.clamp(tw, min=nearzero)
-    # tu = torch.clamp(tu, min=nearzero)
-    # Se = torch.clamp(Se, min=nearzero)
-    # tc = torch.clamp(tc, min=nearzero)
-    # ddf = torch.clamp(ddf, min=0.0)
-    # Sb2 = torch.clamp(Sb2, min=nearzero)
-    # alpha = torch.clamp(alpha, 0.0, 1.0)
+    Sn  = F.relu(Sn)
 
     # ============================================================
-    # 1. Phenology Module (Soft Switch) - inline GSI
+    # 1. Phenology Module (Soft Switch) - GSI with trange
+    # tmax 在接口中保留，内部作为 trange 使用（tmax = tmin + trange → trange = tmax - tmin）
     # ============================================================
-    t_range = torch.clamp(tmax - tmin, min=0.1)
-    flux_gsi = torch.clamp((T - tmin) / t_range, 0.0, 1.0)
+    trange = torch.clamp(tmax - tmin, min=0.1)
+    flux_gsi = torch.clamp((T - tmin) / trange, 0.0, 1.0)
 
-    # w_phen = 0: Use raw PET (Physics control)
-    # w_phen = 1: Use GSI-modified PET (Biology control)
+    # w_phen = 0: Use raw PET; w_phen = 1: Use GSI-modified PET
     PET_bio = PET * flux_gsi
     PET_effective = w_phen * PET_bio + (1.0 - w_phen) * PET
 
     # ============================================================
-    # 2. Interception Module (Flux Gating) - inline seasonal interception
+    # 2. Interception Module (Flux Gating)
+    # 截留受 PET_effective 约束，防止能量不守恒
     # ============================================================
     is_time_safe = torch.clamp(is_time, 0.0, 365.0)
-    rad = 2.0 * 3.1415926535 * (doy - is_time_safe) / 365.0
+    rad = 2.0 * torch.pi * (doy - is_time_safe) / 365.0
     season_factor = 0.5 * (torch.cos(rad) + 1.0)
 
     flux_potential = alpha * P * season_factor
-    flux_i_pot = torch.minimum(flux_potential, P)
+    flux_i_pot = torch.minimum(flux_potential, torch.minimum(P, PET_effective))
 
     # Only w_int fraction of the area intercepts water
     flux_i = flux_i_pot * w_int
     P_through = P - flux_i
 
+    # 截留消耗后的剩余 PET 交给土壤蒸发
+    pet_for_soil = F.relu(PET_effective - flux_i)
+
     # ============================================================
-    # 3. Snow Module (Input Splitting / Bypass)
+    # 3. Snow Module (Soft Switch)
+    # 用 sigmoid 替代硬阈值，打通 tcrit 的梯度回传
     # ============================================================
-    is_rain = (T > tcrit).float()
+    is_rain = torch.sigmoid(T - tcrit)
 
     # Path A: Bypass (Direct to soil)
-    P_bypass = P_through * is_rain + P_through * (1 - is_rain) * (1.0 - w_snow)
+    P_bypass  = P_through * is_rain + P_through * (1.0 - is_rain) * (1.0 - w_snow)
 
     # Path B: Storage (Enters Snowpack)
-    P_to_snow = P_through * (1 - is_rain) * w_snow
+    P_to_snow = P_through * (1.0 - is_rain) * w_snow
 
-    # Physics: Melt logic
-    melt_pot = F.relu(T - tcrit) * ddf
-    flux_qn = torch.minimum(melt_pot, Sn)
+    # 融雪：sigmoid × softplus，消除冰点以下虚假融雪，保证 tcrit/ddf 全程可导
+    melt_drive = torch.sigmoid(T - tcrit) * F.softplus(T - tcrit)
+    flux_qn    = torch.minimum(melt_drive * ddf, Sn)
 
-    # Update State
-    Sn_new = torch.clamp(Sn + P_to_snow - flux_qn, min=0.0)
-
-    # Recombine: Effective P entering soil
-    P_eff = P_bypass + flux_qn
+    Sn_new = Sn + P_to_snow - flux_qn
+    P_eff  = P_bypass + flux_qn
 
     # ============================================================
     # 4. Surface Soil Module (S1)
+    # 顺序：溢流 → 蒸发 → 下渗
     # ============================================================
-    S1 = S1 + P_eff
+    # Step 1: 溢流
+    flux_q1f = F.relu((S1 + P_eff) - Sb1)
+    S1 = S1 + P_eff - flux_q1f
 
-    # Surface Runoff (Saturation excess) - 参考saturation_1函数
-    flux_q1f = F.relu(S1 - Sb1)
-    S1 = S1 - flux_q1f
+    # Step 2: 蒸发（使用截留后剩余 PET）
+    ratio_s1 = torch.clamp(S1 / (Sb1 + nearzero), max=1.0)
+    flux_et1 = torch.minimum(pet_for_soil * ratio_s1, S1)
+    S1 = S1 - flux_et1
 
-    # Percolation to S2 (recharge) - 参考recharge_3函数
-    flux_qw_pot = S1 / (tw + 1e-6)
-    flux_qw = torch.minimum(flux_qw_pot, S1)
-    S1 = S1 - flux_qw
-
-    # Evaporation - 参考evap_7函数
-    ratio_s1 = S1 / (Sb1 + 1e-6)
-    flux_et1_pot = PET_effective * ratio_s1
-    flux_et1 = torch.minimum(flux_et1_pot, S1)
-    S1_new = torch.clamp(S1 - flux_et1, min=0.0)
+    # Step 3: 下渗（指数解析解）
+    flux_qw = S1 * (1.0 - torch.exp(-1.0 / (tw + nearzero)))
+    S1_new  = S1 - flux_qw
 
     # ============================================================
     # 5. Subsurface Module (S2) (State Leakage)
     # ============================================================
     S2 = S2 + flux_qw
 
-    # Calculate Potential Overflow
+    # 地下溢流：仅 w_sub 比例快速流出
     flux_q2f_pot = F.relu(S2 - Sb2)
-
-    # Apply Weight: Only w_sub fraction flows out rapidly
     flux_q2f = flux_q2f_pot * w_sub
     S2 = S2 - flux_q2f
 
-    # Baseflow - 参考baseflow_1函数
-    flux_q2u_pot = S2 / (tu + 1e-6)
-    flux_q2u = torch.minimum(flux_q2u_pot, S2)
+    # 基流（指数解析解）
+    flux_q2u = S2 * (1.0 - torch.exp(-1.0 / (tu + nearzero)))
     S2 = S2 - flux_q2u
 
-    # Evaporation from S2 - 参考evap_7函数
-    ratio_s2 = S2 / (Se + 1e-6)
-    flux_et2_pot = PET_effective * ratio_s2
-    flux_et2 = torch.minimum(flux_et2_pot, S2)
-    S2_new = torch.clamp(S2 - flux_et2, min=0.0)
+    # 蒸发（逐层扣减后的剩余 PET）
+    remaining_pet = F.relu(pet_for_soil - flux_et1)
+    ratio_s2  = torch.clamp(S2 / (Se + nearzero), max=1.0)
+    flux_et2  = torch.minimum(remaining_pet * ratio_s2, S2)
+    S2_new    = S2 - flux_et2
 
     # ============================================================
-    # 6. Routing (baseflow inlined)
+    # 6. Routing（指数解析解）
     # ============================================================
     Sc1 = Sc1 + flux_q1f + flux_q2f
-    flux_qf_pot = Sc1 / (tc + 1e-6)
-    flux_qf = torch.minimum(flux_qf_pot, Sc1)
-    Sc1_new = torch.clamp(Sc1 - flux_qf, min=0.0)
+    flux_qf = Sc1 * (1.0 - torch.exp(-1.0 / (tc + nearzero)))
+    Sc1_new = Sc1 - flux_qf
 
     Sc2 = Sc2 + flux_q2u
-    flux_qs_pot = Sc2 / (tc + 1e-6)
-    flux_qs = torch.minimum(flux_qs_pot, Sc2)
-    Sc2_new = torch.clamp(Sc2 - flux_qs, min=0.0)
+    flux_qs = Sc2 * (1.0 - torch.exp(-1.0 / (tc + nearzero)))
+    Sc2_new = Sc2 - flux_qs
 
     # ============================================================
     # Summary
     # ============================================================
     ET_total = flux_et1 + flux_et2 + flux_i
-    Q_total = flux_qf + flux_qs
+    Q_total  = flux_qf + flux_qs
 
     return Q_total, ET_total, S1_new, S2_new, Sc1_new, Sc2_new, Sn_new
 

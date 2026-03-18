@@ -38,48 +38,27 @@ class Calibrate(torch.nn.Module):
         根据策略生成初始参数
         Shape: (num_basins, ny, num_start)
         """
-        if strategy == "lhs_logit":
-            # --- 方案 A (最推荐): 每个流域独立 LHS + Logit ---
-            # 每个流域单独采样，保证每个流域的 num_start 个成员均匀覆盖 [0,1]^ny
-            sampler = qmc.LatinHypercube(d=self.ny)
-            basin_samples = []
-            for _ in range(self.num_basins):
-                # shape: (num_start, ny)
-                s = sampler.random(n=self.num_start)
-                basin_samples.append(s)
-            # stack: (num_basins, num_start, ny)
-            sample_np = np.stack(basin_samples, axis=0)
+        sampler = qmc.LatinHypercube(d=self.ny)
+        basin_samples = []
+        for _ in range(self.num_basins):
+            # shape: (num_start, ny)
+            s = sampler.random(n=self.num_start)
+            basin_samples.append(s)
+        # stack: (num_basins, num_start, ny)
+        sample_np = np.stack(basin_samples, axis=0)
 
-            # 转为 Tensor: (num_basins, num_start, ny) -> (num_basins, ny, num_start)
-            u = torch.from_numpy(sample_np).float().to(self.device).transpose(1, 2)
+        # 转为 Tensor: (num_basins, num_start, ny) -> (num_basins, ny, num_start)
+        u = torch.from_numpy(sample_np).float().to(self.device).transpose(1, 2)
 
-            # 边界保护 (防止 Logit 溢出)
-            u = u * 0.9 + 0.05
+        # 边界保护 (防止 Logit 溢出)
+        u = u * 0.9 + 0.05
 
-            # Logit 变换 (Inverse Sigmoid)
-            init_val = torch.log(u / (1 - u))
+        # Logit 变换 (Inverse Sigmoid)
+        init_val = torch.log(u / (1 - u))
 
-            print(f"[Calibrate] Initialized with per-basin Latin Hypercube Sampling (LHS) + Logit With {self.num_start} Starts.")
-            return nn.Parameter(init_val)
+        print(f"[Calibrate] Initialized with per-basin Latin Hypercube Sampling (LHS) + Logit With {self.num_start} Starts.")
+        return nn.Parameter(init_val)
 
-        elif strategy == "uniform":
-            # --- 方案 B: 宽范围均匀分布 ---
-            # 生成 [-3, 3] 之间的均匀分布
-            # 对应 Sigmoid 后覆盖 [0.047, 0.952]
-            init_val = torch.rand(self.num_basins, self.ny, self.num_start, device=self.device) * 6 - 3
-            print(f"[Calibrate] Initialized with Broad Uniform Distribution [-3, 3].")
-            return nn.Parameter(init_val)
-
-        elif strategy == "normal":
-            # --- 方案 C: 原始正态分布 (旧方法) ---
-            # 警告：存在中心聚集问题
-            print(f"[Calibrate] Initialized with Standard Normal Distribution (Center Biased).")
-            return nn.Parameter(
-                torch.randn(self.num_basins, self.ny, self.num_start, device=self.device)
-            )
-        
-        else:
-            raise ValueError(f"Unknown initialization strategy: {strategy}")
 
     @classmethod
     def build_by_config(cls, config: dict, device: str = "cpu"):

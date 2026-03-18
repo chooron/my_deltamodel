@@ -227,35 +227,19 @@ class FlexMopexV1(nn.Module):
         # 扩展 weights 到 [n_grid, nmul] 维度
         weights_expanded = {}
         for name in self.weight_names:
-            # weights[name] 形状: [n_grid]
-            # 扩展到 [n_grid, nmul]
             weights_expanded[name] = (
                 weights[name].unsqueeze(-1).repeat(1, self.nmul)
             )
 
-        # 预分配输出张量
-        Q_out = torch.zeros(n_steps, n_grid, self.nmul, device=self.device)
-        ET_out = torch.zeros(n_steps, n_grid, self.nmul, device=self.device)
+        effective_warmup = min(self.warm_up, n_steps)
 
-        # 时间循环
-        for t in range(n_steps):
-            P_t = P[t]
-            T_t = T[t]
-            PET_t = PET[t]
-            doy_t = doy[t]
-
-            # 调用编译后的 mopex_step
-            Q, ET, S1, S2, Sc1, Sc2, Sn = self.mopex_step_compiled(
-                P_t,
-                T_t,
-                PET_t,
-                doy_t,
-                # 结构权重 - 使用扩展后的权重
+        def _step(t):
+            return self.mopex_step_compiled(
+                P[t], T[t], PET[t], doy[t],
                 weights_expanded["w_phen"],
                 weights_expanded["w_int"],
                 weights_expanded["w_snow"],
                 weights_expanded["w_sub"],
-                # 模型参数
                 mopex_params["Sb1"],
                 mopex_params["tw"],
                 mopex_params["tu"],
@@ -268,7 +252,6 @@ class FlexMopexV1(nn.Module):
                 mopex_params["is_time"],
                 mopex_params["tmin"],
                 mopex_params["tmax"],
-                # 状态变量
                 states["S1"],
                 states["S2"],
                 states["Sc1"],
@@ -277,10 +260,30 @@ class FlexMopexV1(nn.Module):
                 self.nearzero,
             )
 
-            Q_out[t] = Q
-            ET_out[t] = ET
+        # ── Warmup 段：no_grad，只更新状态 ──────────────────────────────
+        with torch.no_grad():
+            for t in range(effective_warmup):
+                _, _, S1, S2, Sc1, Sc2, Sn = _step(t)
+                states["S1"] = S1
+                states["S2"] = S2
+                states["Sc1"] = Sc1
+                states["Sc2"] = Sc2
+                states["Sn"] = Sn
 
-            # 更新状态
+        # detach 状态，切断梯度流
+        for k in states:
+            states[k] = states[k].detach()
+
+        # ── 训练段：正常建图 ──────────────────────────────────────────────
+        n_train = n_steps - effective_warmup
+        Q_out = torch.zeros(n_train, n_grid, self.nmul, device=self.device)
+        ET_out = torch.zeros(n_train, n_grid, self.nmul, device=self.device)
+
+        for i in range(n_train):
+            t = effective_warmup + i
+            Q, ET, S1, S2, Sc1, Sc2, Sn = _step(t)
+            Q_out[i] = Q
+            ET_out[i] = ET
             states["S1"] = S1
             states["S2"] = S2
             states["Sc1"] = Sc1
@@ -341,36 +344,43 @@ class FlexMopexV1(nn.Module):
         )
         doy = x_dict["doy"].repeat(1, 1, self.nmul)
 
-        # MOPEX 时间循环
+        # MOPEX 时间循环（warmup 段 no_grad，训练段正常建图）
         Q_mopex, ET_mopex = self._mopex_timestep_loop(
             P, T, PET, doy, mopex_params, weights, n_steps, n_grid
         )
+
+        # Q_mopex shape: (n_train, n_grid, nmul)，n_train = n_steps - effective_warmup
+        n_train = Q_mopex.shape[0]
 
         # 平均 nmul 维度
         Q_mean = Q_mopex.mean(-1)
         ET_mean = ET_mopex.mean(-1)
 
-        # 应用路由
-        Qrouted = self._apply_routing(Q_mean, n_steps, n_grid)
+        # 应用路由（使用实际训练步数）
+        Qrouted = self._apply_routing(Q_mean, n_train, n_grid)
+
+        # target 截掉 warmup 对齐
+        effective_warmup = n_steps - n_train
+        target = x_dict["target"]
+        if effective_warmup > 0:
+            target = target[effective_warmup:]
 
         # 构造返回字典
         result: Dict[str, torch.Tensor] = {
             "streamflow": Qrouted,
-            "target": x_dict["target"],
+            "target": target,
         }
 
-        # save weights - 扩展到 [n_steps, n_grid, 1] 以便保存
+        # save weights - 扩展到 [n_train, n_grid, 1] 以便保存
         for weight_name in self.weight_names:
-            # weights[weight_name] 形状: [n_grid]
-            # 扩展到 [n_steps, n_grid, 1]
             result[weight_name] = (
-                weights[weight_name].unsqueeze(0).repeat(n_steps, 1, 1)
+                weights[weight_name].unsqueeze(0).repeat(n_train, 1, 1)
             ).permute(0, 2, 1)
 
-        # 截断warmup
+        # 截断warmup（warm_up_states=False 时的旧逻辑，现已由 no_grad 段替代，保留兼容）
         if not self.warm_up_states:
             for key in result:
                 if result[key] is not None:
-                    result[key] = result[key][self.pred_cutoff :]
+                    result[key] = result[key][self.pred_cutoff:]
 
         return result
