@@ -102,7 +102,7 @@ train:
   target:
   - streamflow
   # 日志频率控制
-  log_interval: 10          # 每10个epoch记录一次
+  log_interval: 1          # 每10个epoch记录一次
   # 精英变异参数
   elite_reset_interval: 20  # 每20个epoch触发一次
   elite_reset_start: 30     # 从第30个epoch开始
