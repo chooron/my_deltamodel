@@ -1,17 +1,8 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Tuple, Optional, Any
 
 from dmg.models.phy_models.unify_v1 import UnifyV1
-
-# 引入通量计算函数
-from dmg.models.phy_models.flux.interception import interception_1
-from dmg.models.phy_models.flux.evap import evap_1, evap_3
-from dmg.models.phy_models.flux.saturation import saturation_3
-from dmg.models.phy_models.flux.percolation import percolation_2
-from dmg.models.phy_models.flux.split import split_1
-from dmg.models.phy_models.flux.baseflow import baseflow_1
 
 # 引入单位线 (Triangular UH)
 from dmg.models.phy_models.unithydro.uh_tri_3 import DplTri3
@@ -73,39 +64,52 @@ def _flexi_production_step_impl(
     Returns: flux_rf (fast in), flux_rs_total (slow in), flux_ea, S1_new, S2_new
     """
     # --- 1. Interception Process (S1) ---
-    flux_peff = interception_1(P, S1, imax, nearzero=nearzero)
-    zeros = torch.zeros_like(flux_peff)
-    flux_peff = torch.clamp(flux_peff, min=zeros, max=P)
+    # interception_1: peff = P * (1 - sf), where sf = 1/(1+exp((S-Smax+r*e*Smax)/(r*Smax)))
+    # sf -> 1 when S << Smax (store empty) -> peff -> 0 (all intercepted)
+    # sf -> 0 when S >> Smax (store full)  -> peff -> P (all passes through)
+    # Using MARRMoT defaults: r=0.01, e=5.0
+    _r, _e = 0.01, 5.0
+    _imax_safe = torch.abs(imax) + nearzero
+    _sf = torch.sigmoid((S1 - imax + _r * _e * _imax_safe) / (_r * _imax_safe))
+    flux_peff = torch.clamp(P * (1.0 - _sf), min=torch.zeros_like(P), max=P)
 
-    S1_tmp = S1 + P - flux_peff
-    S1_tmp = torch.clamp(S1_tmp, min=nearzero)
+    # Sequential update: S1 receives P, loses peff
+    S1_tmp = torch.clamp(S1 + P - flux_peff, min=nearzero)
 
-    flux_ei = evap_1(S1_tmp, PET, nearzero=nearzero)
+    # evap_1: min(S1, PET)  [dt=1]
+    flux_ei = torch.minimum(S1_tmp, PET)
     flux_ei = torch.minimum(flux_ei, S1_tmp - nearzero)
     flux_ei = F.relu(flux_ei)
 
     S1_new = torch.clamp(S1_tmp - flux_ei, min=nearzero)
 
     # --- 2. Soil Moisture Process (S2) ---
-    flux_ru = saturation_3(S2, smax, beta, flux_peff, nearzero=nearzero)
-    flux_ru = torch.clamp(flux_ru, min=zeros, max=flux_peff)
+    # saturation_3: (1 - 1/(1+exp((S/Smax + 0.5)/beta))) * peff  [MARRMoT sigmoid form]
+    _ratio = S2 / (smax + nearzero)
+    _sat_frac = 1.0 - 1.0 / (1.0 + torch.exp((_ratio + 0.5) / (beta + nearzero)))
+    flux_ru = torch.clamp(_sat_frac * flux_peff, min=torch.zeros_like(flux_peff), max=flux_peff)
 
     rem_peff = F.relu(flux_peff - flux_ru)
 
-    # Split excess -> Fast vs Slow
-    flux_rf = split_1(1.0 - d_split, rem_peff, nearzero=nearzero)
-    flux_rs = F.relu(rem_peff - flux_rf)
+    # split_1: fast = (1-d)*excess, slow = d*excess
+    flux_rf = (1.0 - d_split) * rem_peff
+    flux_rs = d_split * rem_peff
 
     S2_tmp = torch.clamp(S2 + flux_ru, min=nearzero)
 
+    # evap_3: min(S2/(lp*smax)*PET, PET, S2)  [dt=1, uses remaining PET]
     PET_rem = F.relu(PET - flux_ei)
-    flux_eur = evap_3(lp, S2_tmp, smax, PET_rem, nearzero=nearzero)
+    flux_eur = torch.minimum(
+        torch.minimum(S2_tmp / (lp * smax + nearzero) * PET_rem, PET_rem),
+        S2_tmp,
+    )
     flux_eur = torch.minimum(flux_eur, S2_tmp - nearzero)
     flux_eur = F.relu(flux_eur)
 
     S2_tmp2 = torch.clamp(S2_tmp - flux_eur, min=nearzero)
 
-    flux_ps = percolation_2(percmax, S2_tmp2, smax, nearzero=nearzero)
+    # percolation_2: min(S2, percmax*S2/smax)  [dt=1]
+    flux_ps = torch.minimum(S2_tmp2, percmax * S2_tmp2 / (smax + nearzero))
     flux_ps = torch.minimum(flux_ps, S2_tmp2 - nearzero)
     flux_ps = F.relu(flux_ps)
 
@@ -136,8 +140,8 @@ def _flexi_routing_step_impl(
     # --- S3: Fast Routing Store ---
     S3_tmp = torch.clamp(S3 + flux_rfl, min=nearzero)
 
-    flux_qf = baseflow_1(kf, S3_tmp, nearzero=nearzero)
-    flux_qf = torch.minimum(flux_qf, S3_tmp - nearzero)
+    # baseflow_1: kf * S3  [linear reservoir, rate param d-1]
+    flux_qf = torch.minimum(kf * S3_tmp, S3_tmp - nearzero)
     flux_qf = F.relu(flux_qf)
 
     S3_new = torch.clamp(S3_tmp - flux_qf, min=nearzero)
@@ -145,8 +149,8 @@ def _flexi_routing_step_impl(
     # --- S4: Slow Routing Store ---
     S4_tmp = torch.clamp(S4 + flux_rsl, min=nearzero)
 
-    flux_qs = baseflow_1(ks, S4_tmp, nearzero=nearzero)
-    flux_qs = torch.minimum(flux_qs, S4_tmp - nearzero)
+    # baseflow_1: ks * S4  [linear reservoir, rate param d-1]
+    flux_qs = torch.minimum(ks * S4_tmp, S4_tmp - nearzero)
     flux_qs = F.relu(flux_qs)
 
     S4_new = torch.clamp(S4_tmp - flux_qs, min=nearzero)
@@ -242,11 +246,32 @@ class Flexi(UnifyV1):
         warm_up = min(self.warm_up, n_steps)
 
         with torch.no_grad():
+            wu_fast_list = []
+            wu_slow_list = []
             for t in range(warm_up):
-                _, _, _, S1, S2 = self.production_step(
+                flux_rf_wu, flux_rs_wu, _, S1, S2 = self.production_step(
                     P_seq[t], PET_seq[t], S1, S2,
                     smax, beta, d_split, percmax, lp, imax, nearzero)
-        S1, S2 = S1.detach(), S2.detach()
+                wu_fast_list.append(flux_rf_wu)
+                wu_slow_list.append(flux_rs_wu)
+
+            if warm_up > 0:
+                # Route warm-up fluxes through UH then routing stores
+                wu_fast_stack = torch.stack(wu_fast_list, dim=0)
+                wu_slow_stack = torch.stack(wu_slow_list, dim=0)
+                wu_fast_flat = wu_fast_stack.permute(1, 2, 0).reshape(n_grid * nmul, warm_up)
+                wu_slow_flat = wu_slow_stack.permute(1, 2, 0).reshape(n_grid * nmul, warm_up)
+                nlagf_flat_wu = nlagf.reshape(n_grid * nmul, 1)
+                nlags_flat_wu = nlags.reshape(n_grid * nmul, 1)
+                wu_rfl_flat = self.uh_fast(wu_fast_flat, nlagf_flat_wu)
+                wu_rsl_flat = self.uh_slow(wu_slow_flat, nlags_flat_wu)
+                wu_rfl_seq = wu_rfl_flat.view(n_grid, nmul, warm_up).permute(2, 0, 1).unbind(0)
+                wu_rsl_seq = wu_rsl_flat.view(n_grid, nmul, warm_up).permute(2, 0, 1).unbind(0)
+                for t in range(warm_up):
+                    _, S3, S4 = self.routing_step(
+                        wu_rfl_seq[t], wu_rsl_seq[t], S3, S4, kf, ks, nearzero)
+
+        S1, S2, S3, S4 = S1.detach(), S2.detach(), S3.detach(), S4.detach()
 
         # ==========================================================
         # Phase 1: Production Loop (Python Loop + Compiled Step)

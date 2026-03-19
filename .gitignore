@@ -202,6 +202,7 @@ cache
 *.md
 
 !README.md
+!SKILL.md
 !data/README.md
 
 *.npy

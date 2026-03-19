@@ -202,7 +202,9 @@ class NewTrainer(BaseTrainer):
         self.total_loss = 0.0
         self.model.loss_dict = {key: 0.0 for key in self.model.loss_dict}
 
-        for mb in range(1, n_minibatch + 1):
+        params = self.model.get_parameters()
+        prog_str = f"Epoch {epoch}/{self.epochs}"
+        for mb in tqdm.tqdm(range(1, n_minibatch + 1), desc=prog_str, leave=False, dynamic_ncols=True):
             self.current_batch = mb
 
             dataset_sample = self.sampler.get_training_sample(
@@ -217,14 +219,13 @@ class NewTrainer(BaseTrainer):
                 self.optimizer.zero_grad()
                 continue
 
-            self._emit_progress(f"  [Epoch {epoch} Batch {mb}/{n_minibatch}] loss={loss.item():.4f}")
             loss.backward()
 
-            for param in self.model.get_parameters():
+            for param in params:
                 if param.grad is not None:
                     torch.nan_to_num_(param.grad, nan=0.0, posinf=1.0, neginf=-1.0)
 
-            torch.nn.utils.clip_grad_norm_(self.model.get_parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)
             self.optimizer.step()
             self.optimizer.zero_grad()
             self.total_loss += loss.item()

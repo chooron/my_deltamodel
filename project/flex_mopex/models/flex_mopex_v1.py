@@ -82,7 +82,10 @@ class FlexMopexV1(nn.Module):
 
     def _setup_compiled_kernels(self) -> None:
         """使用 torch.compile 编译 mopex_step 函数"""
-        self.mopex_step_compiled = mopex_core.mopex_step
+        if hasattr(torch, "compile"):
+            self.mopex_step_compiled = torch.compile(mopex_core.mopex_step)
+        else:
+            self.mopex_step_compiled = mopex_core.mopex_step
 
     def _descale_params(
         self,
