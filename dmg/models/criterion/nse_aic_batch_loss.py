@@ -117,9 +117,14 @@ class NseAicBatchLoss(BaseCriterion):
             loss_fit = torch.tensor(0.0, device=self.device)
 
         # ============================================================
-        # 2. AIC Penalty (预留，当前未启用)
+        # 2. AIC Penalty
         # ============================================================
         weights_dict = kwargs.get("weights", None)
+        if weights_dict is None:
+            raise ValueError(
+                "NseAicBatchLoss requires 'weights' in kwargs. "
+                "Set 'loss_kwargs_mode: weights' in your train config."
+            )
         loss_complexity = torch.tensor(0.0, device=self.device)
         if weights_dict is not None:
             for name, cost in self.param_costs.items():

@@ -49,3 +49,7 @@ if [ $failed -ne 0 ]; then
 fi
 
 echo "All experiments completed successfully!"
+
+# 脚本最后一行添加：
+echo "All tasks done. Shutting down now..."
+/usr/bin/shutdown
