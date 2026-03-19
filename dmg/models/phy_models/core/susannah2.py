@@ -71,31 +71,39 @@ def susannah2_step(
     # Capacity is (sb - S2) * fc / phi
     cap_s1_to_s2 = F.relu(sb - S2) * fc / (phi + nearzero)
 
-    # recharge rg (saturation-based)
+    # recharge rg (saturation-based): fraction of P that infiltrates to S2
     flux_rg = saturation_1(P, S1, cap_s1_to_s2, nearzero=nearzero)
     zeros = torch.zeros_like(flux_rg)
     flux_rg = torch.clamp(flux_rg, min=zeros, max=P)
 
-    # excess se (overflow-based)
-    S1_tmp = S1 + P - flux_rg
-    flux_se = excess_1(S1_tmp, cap_s1_to_s2, nearzero=nearzero)
+    # excess se (overflow when S1 already exceeds capacity)
+    # Based on pre-inflow S1 to avoid double-counting with rg
+    flux_se = excess_1(S1, cap_s1_to_s2, nearzero=nearzero)
     flux_se = F.relu(flux_se)
 
+    # Total outflow from S1 to S2 capped at P + available S1 water
+    # Prevents rg + se from exceeding what S1 can physically supply
+    rg_se_max = P + F.relu(S1 - cap_s1_to_s2)
+    total_rg_se = flux_rg + flux_se
+    scale_rg_se = torch.where(
+        total_rg_se > rg_se_max,
+        rg_se_max / (total_rg_se + nearzero),
+        torch.ones_like(total_rg_se),
+    )
+    flux_rg = flux_rg * scale_rg_se
+    flux_se = flux_se * scale_rg_se
+
     # Temporary update for evaporation
-    S1_tmp2 = S1_tmp - flux_se
-    S1_tmp2 = torch.clamp(S1_tmp2, min=nearzero)
+    S1_tmp2 = torch.clamp(S1 + P - flux_rg - flux_se, min=nearzero)
 
     # Evaporation from unsaturated store
     flux_eus = evap_7(S1_tmp2, sb, PET, nearzero=nearzero)
-
-    # Constraint to prevent negative storage
     flux_eus = torch.minimum(flux_eus, S1_tmp2 - nearzero)
     flux_eus = torch.minimum(flux_eus, PET)
     flux_eus = F.relu(flux_eus)
 
     # Update S1 final
-    S1_new = S1_tmp2 - flux_eus
-    S1_new = torch.clamp(S1_new, min=nearzero)
+    S1_new = torch.clamp(S1_tmp2 - flux_eus, min=nearzero)
 
     # --- 2. S2 Process (Saturated Store) ---
 
@@ -144,7 +152,8 @@ def susannah2_step(
     # --- 3. Output Aggregation ---
     # Qsim = qse (saturation excess) + qss (subsurface)
     # Ea = eus (unsaturated) + esat (saturated)
+    # qr is a groundwater sink (GWsink), not part of Ea
     Qsim = flux_qse + flux_qss
-    Ea = flux_eus + flux_esat + flux_qr
+    Ea = flux_eus + flux_esat
 
     return Qsim, Ea, S1_new, S2_new

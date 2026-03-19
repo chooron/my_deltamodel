@@ -47,12 +47,15 @@ def baseflow_6(
 
 
 # Parameter range dictionary (based on MARRMoT m_25_tcm_6p_4s)
+# Note: fa is the fraction of mean(P) that forms abstraction rate.
+# The actual abstraction rate ca = fa * mean(P) must be pre-computed
+# from the catchment's mean precipitation before calling tcm_step.
 TCM_PARAMS_BOUNDS = {
     "phi": [0.0, 1.0],  # Fraction preferential recharge [-]
     "rc": [1.0, 2000.0],  # Maximum soil moisture depth [mm]
     "gam": [0.0, 1.0],  # Fraction of Ep reduction with depth [-]
     "k1": [0.0, 1.0],  # Runoff coefficient [d-1]
-    "ca": [0.0, 10.0],  # Abstraction rate [mm/d] (Derived from fa * mean(P))
+    "fa": [0.0, 1.0],  # Fraction of mean(P) that forms abstraction rate [-]
     "k2": [0.0, 1.0],  # Runoff coefficient [mm-1 d-1]
 }
 
@@ -62,7 +65,7 @@ TCM_PARAMS_DESC = {
     "rc": "Maximum soil moisture depth [mm]",
     "gam": "Fraction of Ep reduction with depth [-]",
     "k1": "Runoff coefficient [d-1]",
-    "ca": "Abstraction rate [mm/day]",
+    "fa": "Fraction of mean(P) that forms abstraction rate [-]",
     "k2": "Runoff coefficient [mm-1 d-1]",
 }
 
@@ -93,13 +96,15 @@ def tcm_step(
     rc: torch.Tensor,
     gam: torch.Tensor,
     k1: torch.Tensor,
-    ca: torch.Tensor,
+    fa: torch.Tensor,
     k2: torch.Tensor,
     # State variables
     S1: torch.Tensor,
     S2: torch.Tensor,
     S3: torch.Tensor,
     S4: torch.Tensor,
+    # Pre-computed mean precipitation for abstraction: ca = fa * mean(P)
+    mean_P: torch.Tensor,
     nearzero: float = 1e-6,
 ) -> Tuple[
     torch.Tensor,
@@ -112,10 +117,17 @@ def tcm_step(
     """
     Thames Catchment Model (TCM) single-step calculation.
 
+    MATLAB reference: m_25_tcm_6p_4s
+    - fa is fraction of mean(P) forming abstraction rate: ca = fa * mean(P)
+    - S2 is a deficit store (StoreSigns = -1): increases with ET, decreases with qex1
+    - flux_qex2 uses saturation_9: passes qex1 through when S2 deficit is near zero
+
     Model reference:
     Moore, R. J., & Bell, V. A. (2001). Comparison of rainfall-runoff models
     for flood forecasting. Part 1: Literature review of models.
     """
+    # Abstraction rate [mm/d] = fa * mean(P), matching MATLAB init()
+    ca = fa * mean_P
 
     # --- 1. Pre-process ---
     flux_pn = effective_1(P, PET, nearzero=nearzero)
@@ -127,60 +139,40 @@ def tcm_step(
     flux_pin = flux_pn - flux_pby
 
     # --- 2. Upper Store (S1) ---
-    S1 = S1 + flux_pin  # Add Inflow
+    S1 = S1 + flux_pin
 
-    # Overflow
+    # Saturation overflow from S1
     flux_qex1 = saturation_1(torch.zeros_like(S1), S1, rc, nearzero=nearzero)
     flux_qex1 = torch.clamp(flux_qex1, min=zeros, max=S1)
     S1 = S1 - flux_qex1
 
-    # Evap S1
+    # Evap from S1
     flux_ea = evap_1(S1, PET, nearzero=nearzero)
     flux_ea = torch.minimum(flux_ea, S1)
     S1 = S1 - flux_ea
     S1_new = torch.clamp(S1, min=nearzero)
 
     # --- 3. Deficit Store (S2) ---
-    # [FIX 1: Energy Balance] Use remaining PET
-    pet_rem = F.relu(PET - flux_ea)
-
-    # [FIX 2: Structural Bug Fix]
-    # Calculate potential ET based on S1 (as per original model)
-    # Inf tensor just for parameter compatibility
-    inf_tensor = torch.full_like(S1, float("inf"))
-    flux_et_potential = evap_16(
+    # evap_16: gam * Ep, active when S1 > 0.01 (smooth threshold)
+    # Uses full PET per MATLAB: flux_et = evap_16(gam, Inf, S1, 0.01, Ep, dt)
+    inf_tensor = torch.full_like(S1_new, float("inf"))
+    flux_et = evap_16(
         gam,
         inf_tensor,
         S1_new,
         torch.tensor(0.01, device=P.device),
-        pet_rem,
+        PET,
         nearzero=nearzero,
     )
 
-    # !!! CRITICAL FIX !!!
-    # Add a constraint based on S2's own state.
-    # If Deficit (S2) is too large (e.g., > 500mm or > rc_deep), stop evaporation.
-    # Since we don't have a specific "S2 max capacity" parameter in TCM 6p,
-    # we can use a heuristic or just rely on the 'gam' parameter if evap_16 handles depth correctly.
-    # But usually evap_16 in MARRMoT is: E = Ep * [S1/(S1+...)] (only depends on S1).
-    # We MUST apply a throttling factor based on S2.
-    # Let's assume a deep capacity limit (e.g., 2000mm) or scale it relative to rc.
-    # Here we use a smooth decay: As S2 grows, ET decreases.
-    # Factor = exp(-S2 / 500)  <- Empirical protection against "Deep Deficit Trap"
-    decay_factor = torch.exp(-S2 / 500.0)
-    flux_et = flux_et_potential * decay_factor
+    # S2 is a deficit store: ET deepens deficit, qex1 fills it
+    # dS2 = flux_et + flux_qex2 - flux_qex1  (MATLAB ODE)
+    # Sequential: first compute qex2 from current S2, then update
+    # flux_qex2 = saturation_9(flux_qex1, S2, 0.01):
+    #   passes qex1 through when S2 deficit is near zero (saturated)
+    flux_qex2 = saturation_9(flux_qex1, S2, torch.tensor(0.01, device=P.device), nearzero=nearzero)
 
-    # Update S2 (Sequential)
-    # S2 increases with ET, decreases with Inflow (qex1)
-    # S2_temp represents the tentative deficit
-    S2_temp = S2 + flux_et - flux_qex1
-
-    # Overflow (Saturation Excess to S3)
-    # If S2_temp < 0, it means Deficit is filled and we have water for S3
-    flux_qex2 = F.relu(-S2_temp)
-
-    # Final S2 state (Deficit cannot be negative)
-    S2_new = torch.clamp(S2_temp, min=nearzero)
+    S2_new = torch.clamp(S2 + flux_et + flux_qex2 - flux_qex1, min=nearzero)
 
     # --- 4. Fast Routing (S3) ---
     inflow_S3 = flux_qex2 + flux_pby
@@ -188,29 +180,27 @@ def tcm_step(
 
     flux_quz = baseflow_1(k1, S3, nearzero=nearzero)
     flux_quz = torch.minimum(flux_quz, S3)
-
     S3 = S3 - flux_quz
     S3_new = torch.clamp(S3, min=nearzero)
 
     # --- 5. Slow Routing (S4) ---
     S4 = S4 + flux_quz
 
-    # Abstraction Loss
+    # Abstraction loss: ca = fa * mean(P)
     flux_a = torch.minimum(ca, S4)
     S4 = S4 - flux_a
 
-    # Baseflow
+    # Baseflow: baseflow_6(k2, 0, S4) — quadratic, threshold=0
     flux_q = baseflow_6(
         k2, torch.tensor(0.0, device=P.device), S4, nearzero=nearzero
     )
     flux_q = torch.minimum(flux_q, S4)
-
     S4 = S4 - flux_q
     S4_new = torch.clamp(S4, min=nearzero)
 
     # --- 6. Output ---
     Qsim = flux_q
-    # Ea includes Abstraction (flux_a) to satisfy mass balance
-    Ea = flux_en + flux_ea + flux_et + flux_a
+    # Ea = interception loss + S1 evap + deep ET; abstraction is a separate sink
+    Ea = flux_en + flux_ea + flux_et
 
     return Qsim, Ea, S1_new, S2_new, S3_new, S4_new

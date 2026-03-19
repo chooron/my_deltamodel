@@ -103,17 +103,18 @@ def topmodel_step(
     S1_tmp = S1 + flux_peff - flux_ea
     
     # 2.3 饱和溢出 (Saturation Excess)
-    # 当 S1 > suzmax 时产生溢流
-    # 同样使用 ReLU 来计算溢出量，保持梯度连续
-    flux_qex = F.relu(S1_tmp - suzmax)
-    
+    # 当 S1 > suzmax 时产生溢流，使用 smooth saturation_1 保持梯度连续
+    # MATLAB: saturation_1(flux_peff, S1, suzmax)
+    flux_qex = saturation_1(flux_peff, S1_tmp, suzmax, nearzero=nearzero)
+    flux_qex = torch.clamp(flux_qex, min=torch.zeros_like(flux_peff), max=flux_peff)
+
     # 扣除溢流
     S1_tmp = S1_tmp - flux_qex
 
     # 2.4 壤中流/补给 (Recharge / Interflow to S2)
     threshold_s1 = st * suzmax
     capacity_s1 = suzmax - threshold_s1
-    
+
     flux_qv_pot = interflow_10(
         S1_tmp, kd, threshold_s1, capacity_s1, nearzero=nearzero
     )

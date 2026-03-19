@@ -132,6 +132,17 @@ def load_basin_ids(n_check: int = N_BASINS):
 # ==========================================
 # 3. 主程序
 # ==========================================
+COLUMN_ORDER = [
+    "collie1", "wetland", "collie2", "newzealand1", "ihacres",
+    "alpine1", "gr4j", "us1", "susannah1", "susannah2",
+    "collie3", "alpine2", "hillslope", "topmodel", "plateau",
+    "newzealand2", "penman", "simhyd", "australia", "gsfb",
+    "flexb", "vic", "mopex1", "tcm", "flexi",
+    "tank", "xinanjiang", "hymod", "mopex2", "mopex3",
+    "mopex4", "flexis", "mopex5", "modhydrolog", "hbv96", "smar",
+]
+
+
 def main():
     print(f"Scanning: {RESULT_PATH}\n")
 
@@ -153,8 +164,15 @@ def main():
         print("Error: No valid data.")
         return
 
-    df_train = pd.DataFrame(train_dict)   # shape=(559, n_models)
-    df_test  = pd.DataFrame(test_dict)
+    # 按指定顺序排列列，缺失的列跳过，多余的列追加到末尾
+    ordered_cols = [c for c in COLUMN_ORDER if c in test_dict]
+    extra_cols   = [c for c in test_dict if c not in COLUMN_ORDER]
+    if extra_cols:
+        print(f"  [Info] Extra models not in COLUMN_ORDER: {extra_cols}")
+    final_cols = ordered_cols + extra_cols
+
+    df_train = pd.DataFrame(train_dict)[final_cols]
+    df_test  = pd.DataFrame(test_dict)[final_cols]
 
     basin_ids = load_basin_ids()
     if basin_ids is not None:

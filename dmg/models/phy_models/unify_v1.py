@@ -147,7 +147,7 @@ class UnifyV1(nn.Module):
                     P_seq[t], T_seq[t], PET_seq[t],
                     *param_values,
                     *curr_states,
-                    self.nearzero,
+                    nearzero=self.nearzero,
                 )
                 curr_states = outputs[2:]
 
@@ -166,7 +166,7 @@ class UnifyV1(nn.Module):
                 P_seq[t], T_seq[t], PET_seq[t],
                 *param_values,
                 *curr_states,
-                self.nearzero,
+                nearzero=self.nearzero,
             )
             train_Q[i] = outputs[0]
             curr_states = outputs[2:]

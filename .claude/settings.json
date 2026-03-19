@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python test_blend_hydro_v3.py)"
+      "Bash(python test_blend_hydro_v3.py)",
+      "Bash(find /workspace/my_deltamodel/dmg/models/MARRMoT -type f -name *.m)"
     ]
   }
 }

@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Tuple, Optional, Any
 
@@ -28,7 +27,7 @@ IHACRES_PARAMS_BOUNDS = {
     "alpha": [0.0, 1.0],  # Fast/slow flow division [-]
     "tau_q": [1.0, 5.0],  # Fast flow routing delay [d]
     "tau_s": [1.0, 30.0],  # Slow flow routing delay [d]
-    "tau_d": [1.0, 10.0],  # Pure time delay of total flow [d] (New)
+    "tau_d": [1.0, 10.0],  # Pure time delay of total flow [d]
 }
 
 IHACRES_PARAMS_DESC = {
@@ -41,34 +40,6 @@ IHACRES_PARAMS_DESC = {
     "tau_d": "Pure time delay of total flow [d]",
 }
 
-def evap_linear_deficit(
-    S: torch.Tensor, 
-    lp: torch.Tensor, 
-    Ep: torch.Tensor, 
-    nearzero: float = 1e-6
-) -> torch.Tensor:
-    """
-    Linear evaporation decline based on Moisture Deficit.
-    
-    Physics:
-    - When S = 0 (Saturated):  Ea = Ep
-    - When S = lp (Empty/Dry): Ea = 0
-    - When S > lp (Over Dry):  Ea = 0
-    
-    Formula:
-    Ea = Ep * max(0, 1 - S / lp)
-    
-    Parameters:
-    - S:  Current Moisture Deficit [mm]
-    - lp: Wilting Point / Max Deficit Capacity [mm]
-    - Ep: Potential Evapotranspiration [mm/d]
-    """
-    # 1. 计算水分胁迫因子 (1.0 = 无胁迫, 0.0 = 停止蒸发)
-    # 使用 clamp(min=0.0) 确保当 S > lp 时蒸发为 0，而不是负数
-    stress_factor = torch.clamp(1.0 - S / (lp + nearzero), min=0.0, max=1.0)
-    
-    # 2. 计算实际蒸发
-    return stress_factor * Ep
 
 # ==============================================================================
 # 2. Static Step Function (Compiled)
@@ -89,7 +60,10 @@ def _ihacres_production_step_impl(
     Calculates Moisture Deficit (S1) and Effective Rainfall splitting.
     """
     # 1. Evapotranspiration (increases deficit)
-    flux_ea = evap_linear_deficit(S1, lp, PET, nearzero=nearzero)
+    # evap_12: min(1, exp(2*(1-S/lp))) * Ep  — MATLAB原版公式
+    # 加 min(PET) 上限：离散步进中防止亏缺库蒸发超过 PET 导致亏缺无限增长
+    flux_ea = evap_12(S1, lp, PET, nearzero=nearzero)
+    flux_ea = torch.minimum(flux_ea, PET)
     flux_ea = F.relu(flux_ea)
 
     # 2. Parameter-based effective rainfall (bounded by P)
@@ -153,11 +127,12 @@ class Ihacres(UnifyV1):
         # Initialize Unit Hydrographs
 
         # 1. Parallel Branches (Exp Decay)
+        # max_lag matches MATLAB parRanges: tau_q/tau_s up to 700d
         self.uh_fast = DplExp5(max_lag=int(IHACRES_PARAMS_BOUNDS["tau_q"][1]))
         self.uh_slow = DplExp5(max_lag=int(IHACRES_PARAMS_BOUNDS["tau_s"][1]))
 
         # 2. Final Series Delay (Pure Delay)
-        # uh_8_delay uses tau_d
+        # tau_d up to 119d per MATLAB parRanges
         self.uh_delay = DplDelay8(
             max_lag=int(IHACRES_PARAMS_BOUNDS["tau_d"][1])
         )
