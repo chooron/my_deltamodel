@@ -9,8 +9,8 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# alphas=(0 0.1 0.01 0.03 0.05 0.07 0.001 0.003 0.005 0.007)
-alphas=(0)
+alphas=(0 0.1 0.01 0.03 0.05 0.07 0.001 0.003 0.005 0.007)
+# alphas=(0)
 
 pids=()
 
