@@ -4,30 +4,21 @@ from typing import Dict, Tuple, Optional, Any
 
 from dmg.models.phy_models.unify_v1 import UnifyV1
 
-# 引入通量计算函数
 from dmg.models.phy_models.flux.evap import evap_12
 from dmg.models.phy_models.flux.saturation import saturation_5
 from dmg.models.phy_models.flux.split import split_1
-
-# 引入单位线
-# 1. Exponential Decay UH (for fast/slow routing) -> uh_5_half
 from dmg.models.phy_models.unithydro.uh_exp_5 import DplExp5
-
-# 2. Pure Delay UH (for total flow) -> uh_8_delay
 from dmg.models.phy_models.unithydro.uh_delay_8 import DplDelay8
 
 
-# ==============================================================================
-# 1. Parameter Bounds (Updated to 7 parameters)
-# ==============================================================================
 IHACRES_PARAMS_BOUNDS = {
-    "lp": [1.0, 2000.0],  # Wilting point [mm]
-    "d": [1.0, 2000.0],  # Threshold for flow generation [mm]
-    "p": [0.0, 10.0],  # Flow response non-linearity [-]
-    "alpha": [0.0, 1.0],  # Fast/slow flow division [-]
-    "tau_q": [1.0, 5.0],  # Fast flow routing delay [d]
-    "tau_s": [1.0, 30.0],  # Slow flow routing delay [d]
-    "tau_d": [1.0, 10.0],  # Pure time delay of total flow [d]
+    "lp": [1.0, 2000.0],
+    "d": [1.0, 2000.0],
+    "p": [0.0, 10.0],
+    "alpha": [0.0, 1.0],
+    "tau_q": [1.0, 100.0],
+    "tau_s": [1.0, 300.0],
+    "tau_d": [0.0, 30.0],
 }
 
 IHACRES_PARAMS_DESC = {
@@ -41,14 +32,10 @@ IHACRES_PARAMS_DESC = {
 }
 
 
-# ==============================================================================
-# 2. Static Step Function (Compiled)
-# ==============================================================================
-# 产流部分的逻辑不变，因为它只负责生成 uq 和 us，不负责汇流
 def _ihacres_production_step_impl(
     P: torch.Tensor,
     PET: torch.Tensor,
-    S1: torch.Tensor,  # Deficit Store
+    S1: torch.Tensor,
     lp: torch.Tensor,
     d: torch.Tensor,
     p: torch.Tensor,
@@ -56,35 +43,35 @@ def _ihacres_production_step_impl(
     nearzero: float,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Phase 1: Production Step
-    Calculates Moisture Deficit (S1) and Effective Rainfall splitting.
+    Sequential-explicit IHACRES production step.
+
+    This keeps the MARRMoT flux semantics but uses a discrete update that is
+    state-safe in PyTorch:
+    1. Compute effective rainfall from the current deficit.
+    2. Use the remaining rainfall to fill the deficit store, with overflow
+       routed back to streamflow to preserve mass.
+    3. Apply evaporation on the post-rainfall deficit state.
     """
-    # 1. Evapotranspiration (increases deficit)
-    # evap_12: min(1, exp(2*(1-S/lp))) * Ep  — MATLAB原版公式
-    # 加 min(PET) 上限：离散步进中防止亏缺库蒸发超过 PET 导致亏缺无限增长
-    flux_ea = evap_12(S1, lp, PET, nearzero=nearzero)
-    flux_ea = torch.minimum(flux_ea, PET)
-    flux_ea = F.relu(flux_ea)
+    P = torch.clamp(P, min=0.0)
+    PET = torch.clamp(PET, min=0.0)
+    zeros = torch.zeros_like(P)
+    S1 = F.relu(S1)
 
-    # 2. Parameter-based effective rainfall (bounded by P)
-    flux_u_calc = saturation_5(S1, d, p, P, nearzero=nearzero)
-    flux_u_calc = torch.clamp(flux_u_calc, min=torch.zeros_like(P), max=P)
+    flux_u_pot = saturation_5(S1, d, p, P, nearzero=nearzero)
+    flux_u_pot = torch.clamp(flux_u_pot, min=zeros, max=P)
 
-    # 3. Compute provisional deficit update
-    S1_temp = S1 - P + flux_ea + flux_u_calc
+    rain_to_store = P - flux_u_pot
+    rain_fill = torch.minimum(rain_to_store, S1)
+    flux_overflow = rain_to_store - rain_fill
+    S1_wet = S1 - rain_fill
 
-    # 4. Capture overflow (saturation excess) when S1_temp < 0
-    flux_overflow = F.relu(-S1_temp)
+    flux_ea = evap_12(S1_wet, lp, PET, nearzero=nearzero)
+    flux_ea = torch.clamp(flux_ea, min=zeros, max=PET)
 
-    # 5. Total effective rainfall includes overflow
-    flux_u_total = flux_u_calc + flux_overflow
-
-    # 6. Update state (cannot go below nearzero)
-    S1_new = torch.clamp(S1_temp, min=nearzero)
-
-    # 7. Split fast/slow branches using total effective rainfall
+    flux_u_total = flux_u_pot + flux_overflow
     flux_uq = split_1(alpha, flux_u_total, nearzero=nearzero)
-    flux_us = split_1(1.0 - alpha, flux_u_total, nearzero=nearzero)
+    flux_us = flux_u_total - flux_uq
+    S1_new = S1_wet + flux_ea
 
     return flux_uq, flux_us, flux_ea, S1_new
 
@@ -95,11 +82,6 @@ def _maybe_compile(fn, backend: str):
     if backend == "jit":
         return torch.jit.script(fn)
     return fn
-
-
-# ==============================================================================
-# 3. Model Class (IhacresModel)
-# ==============================================================================
 
 
 class Ihacres(UnifyV1):
@@ -124,24 +106,15 @@ class Ihacres(UnifyV1):
         config.setdefault("model_name", "ihacres")
         super().__init__(config, device, backend)
         self.parameter_bounds = IHACRES_PARAMS_BOUNDS
-        # Initialize Unit Hydrographs
 
-        # 1. Parallel Branches (Exp Decay)
-        # max_lag matches MATLAB parRanges: tau_q/tau_s up to 700d
         self.uh_fast = DplExp5(max_lag=int(IHACRES_PARAMS_BOUNDS["tau_q"][1]))
         self.uh_slow = DplExp5(max_lag=int(IHACRES_PARAMS_BOUNDS["tau_s"][1]))
-
-        # 2. Final Series Delay (Pure Delay)
-        # tau_d up to 119d per MATLAB parRanges
-        self.uh_delay = DplDelay8(
-            max_lag=int(IHACRES_PARAMS_BOUNDS["tau_d"][1])
-        )
+        self.uh_delay = DplDelay8(max_lag=int(IHACRES_PARAMS_BOUNDS["tau_d"][1]) + 1)
         self.production_step = _maybe_compile(_ihacres_production_step_impl, self.backend)
 
     def _init_states(self, n_grid: int, nmul: Optional[int] = None) -> Tuple[torch.Tensor, ...]:
-        """S1: Deficit Store"""
         nmul = nmul or self.nmul
-        S1 = torch.zeros((n_grid, nmul), device=self.device) + self.nearzero
+        S1 = torch.zeros((n_grid, nmul), device=self.device)
         return (S1,)
 
     def _run_model(
@@ -156,80 +129,56 @@ class Ihacres(UnifyV1):
         nmul = nmul or self.nmul
         nearzero = self.nearzero
 
-        # --- A. Data Prep ---
+        if n_steps == 0:
+            return {"streamflow": forcing.new_empty((0, n_grid * nmul))}
+
         P_seq = forcing[..., 0:1].expand(-1, -1, nmul).unbind(0)
         PET_seq = forcing[..., 2:3].expand(-1, -1, nmul).unbind(0)
 
-        # Unpack Parameters (including tau_d)
         lp = static_params["lp"]
         d = static_params["d"]
         p = static_params["p"]
         alpha = static_params["alpha"]
         tau_q = static_params["tau_q"]
         tau_s = static_params["tau_s"]
-        tau_d = static_params["tau_d"]  # New parameter
+        tau_d = static_params["tau_d"]
 
         (S1,) = states
         warm_up = min(self.warm_up, n_steps)
-
-        with torch.no_grad():
-            for t in range(warm_up):
-                _, _, _, S1 = self.production_step(
-                    P_seq[t], PET_seq[t], S1, lp, d, p, alpha, nearzero)
-        S1 = S1.detach()
-
-        # ==========================================================
-        # Phase 1: Production Loop
-        # ==========================================================
         raw_uq_list = []
         raw_us_list = []
 
-        for t in range(n_steps):
-            flux_uq, flux_us, flux_ea, S1 = self.production_step(
+        with torch.no_grad():
+            for t in range(warm_up):
+                flux_uq, flux_us, _, S1 = self.production_step(
+                    P_seq[t], PET_seq[t], S1, lp, d, p, alpha, nearzero
+                )
+                raw_uq_list.append(flux_uq)
+                raw_us_list.append(flux_us)
+        S1 = S1.detach()
+
+        for t in range(warm_up, n_steps):
+            flux_uq, flux_us, _, S1 = self.production_step(
                 P_seq[t], PET_seq[t], S1, lp, d, p, alpha, nearzero
             )
             raw_uq_list.append(flux_uq)
             raw_us_list.append(flux_us)
 
-        # Stack outputs: (T, B, M)
         uq_stack = torch.stack(raw_uq_list, dim=0)
         us_stack = torch.stack(raw_us_list, dim=0)
-        
-        # ==========================================================
-        # Phase 2: Parallel Convolution (Fast & Slow)
-        # ==========================================================
 
-        # 1. Flatten for Conv1d: (B*M, T)
         B_total = n_grid * nmul
         uq_flat = uq_stack.permute(1, 2, 0).reshape(B_total, n_steps)
         us_flat = us_stack.permute(1, 2, 0).reshape(B_total, n_steps)
 
-        # 2. UH Params: (B*M, 1)
         tau_q_flat = tau_q.reshape(B_total, 1)
         tau_s_flat = tau_s.reshape(B_total, 1)
-
-        # 3. Apply Parallel Convolution (Exp Decay)
         routed_uq_flat = self.uh_fast(uq_flat, tau_q_flat)
         routed_us_flat = self.uh_slow(us_flat, tau_s_flat)
 
-        # 4. Summation (Intermediate Q)
-        # Q_sum = Q_fast + Q_slow
         q_sum_flat = routed_uq_flat + routed_us_flat
-
-        # 1. Param for delay
         tau_d_flat = tau_d.reshape(B_total, 1)
-
-        # 2. Apply Serial Convolution (Pure Delay)
         routed_total_flat = self.uh_delay(q_sum_flat, tau_d_flat)
 
-        # 3. Reshape Final Output: (T, B, M)
-        # Note: DplDelay8 output matches input shape (Batch, Time)
-        # Qsim_out = routed_total_flat.view(n_grid, nmul, n_steps).permute(
-        #     2, 0, 1
-        # )        
-        Qsim_out = routed_total_flat.view(n_grid, nmul, n_steps).permute(
-            2, 0, 1
-        )
-
-        warm_up = min(self.warm_up, n_steps)
+        Qsim_out = routed_total_flat.view(n_grid, nmul, n_steps).permute(2, 0, 1)
         return {"streamflow": Qsim_out[warm_up:].flatten(start_dim=1)}

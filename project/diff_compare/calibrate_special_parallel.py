@@ -54,7 +54,7 @@ def main():
 
     config["delta_model"]["phy_model"]["model"][0] = model_name
     config["device"] = "cuda"
-    config["gpu_id"] = 1
+    config["gpu_id"] = 0
 
     # 直接调用 initialize_config，补全 dtype/device/日期等字段
     config = initialize_config(config)

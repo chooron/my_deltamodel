@@ -13,32 +13,33 @@ if [ -f "$UV_VENV/bin/activate" ]; then
 fi
 
 : "${PYTHON:=python3}"
-MAX_PARALLEL=4
+MAX_PARALLEL=1
 
 # 按参数量分4组，避免同时跑大参数模型导致OOM
 # 每次从各组各取1个模型并行，保证4个槽内存压力均衡
 # 组1: 小参数 (4-6 params)
 GROUP1=(
-    "Gr4j"       # 4
-    "Mopex5"     # 5
-    "Ihacres"    # 6
+    "Tcm"
+    # "Gr4j"       # 4
+    # "Mopex5"     # 5
+    # "Ihacres"    # 6
 )
 # 组2: 中参数 (7-8 params)
 GROUP2=(
-    "Hillslope"  # 7
-    "Smar"       # 8
-    "Plateau"    # 8
-    "Newzealand2" # 8
+    # "Hillslope"  # 7
+    # "Smar"       # 8
+    # "Plateau"    # 8
+    # "Newzealand2" # 8
 )
 # 组3: 中大参数 (9-10 params)
 GROUP3=(
-    "Flexb"      # 9
-    "Flexi"      # 10
-    "Mopex4"     # 10
+    # "Flexb"      # 9
+    # "Flexi"      # 10
+    # "Mopex4"     # 10
 )
 # 组4: 大参数 (12 params)
 GROUP4=(
-    "Flexis"     # 12
+    # "Flexis"     # 12
 )
 
 # 交错合并：每轮从各组各取1个，保证并行时参数量均衡

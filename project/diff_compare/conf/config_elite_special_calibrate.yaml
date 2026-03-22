@@ -57,7 +57,7 @@ delta_model:
       eta_min: 0.00001
   phy_model:
     attributes: []
-    directory: /home/oem/jingxin/my_deltamodel/dmg/models/phy_models/specialv1
+    directory: dmg/models/phy_models/specialv1
     dy_drop: 0.0
     forcings:
     - prcp

@@ -271,11 +271,27 @@ class Flexis(UnifyV1):
         warm_up = min(self.warm_up, n_steps)
 
         with torch.no_grad():
+            wu_fast_list = []
+            wu_slow_list = []
             for t in range(warm_up):
-                _, _, _, S1, S2, S3 = self.production_step(
+                flux_rf_wu, flux_rs_wu, _, S1, S2, S3 = self.production_step(
                     P_seq[t], T_seq[t], PET_seq[t], S1, S2, S3,
                     smax, beta, d_split, percmax, lp, imax, tt, ddf, nearzero)
-        S1, S2, S3 = S1.detach(), S2.detach(), S3.detach()
+                wu_fast_list.append(flux_rf_wu)
+                wu_slow_list.append(flux_rs_wu)
+
+            if warm_up > 0:
+                B_total_wu = n_grid * nmul
+                wu_fast_flat = torch.stack(wu_fast_list, dim=0).permute(1, 2, 0).reshape(B_total_wu, warm_up)
+                wu_slow_flat = torch.stack(wu_slow_list, dim=0).permute(1, 2, 0).reshape(B_total_wu, warm_up)
+                wu_rfl = self.uh_fast(wu_fast_flat, nlagf.reshape(B_total_wu, 1))
+                wu_rsl = self.uh_slow(wu_slow_flat, nlags.reshape(B_total_wu, 1))
+                wu_rfl_seq = wu_rfl.view(n_grid, nmul, warm_up).permute(2, 0, 1).unbind(0)
+                wu_rsl_seq = wu_rsl.view(n_grid, nmul, warm_up).permute(2, 0, 1).unbind(0)
+                for t in range(warm_up):
+                    _, S4, S5 = self.routing_step(wu_rfl_seq[t], wu_rsl_seq[t], S4, S5, kf, ks, nearzero)
+
+        S1, S2, S3, S4, S5 = S1.detach(), S2.detach(), S3.detach(), S4.detach(), S5.detach()
 
         # ==========================================================
         # Phase 1: Production Loop (S1, S2, S3)

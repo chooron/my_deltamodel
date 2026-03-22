@@ -17,32 +17,14 @@ class DplDelay8(DplUHBase):
     """
     
     def get_weights(self, params):
-        # 1. 获取延时参数 t_delay
-        t_delay = params
-        
-        # 2. 约束 t_delay
-        # 必须 >= 0，且不能超过 max_lag - 1 (否则核移出边界)
-        # 实际使用中通常 t_delay 不会非常大
-        t_delay = torch.clamp(t_delay, min=0.0)
-        
-        # 3. 计算距离中心的绝对差值
-        # 注意: t_idx=[1,2,3...] 对应 Lag=[0,1,2...]
-        # 所以 Lag t 的位置在 t_idx = t + 1
-        # 目标中心 center = t_delay + 1
+        t_delay = torch.clamp(params, min=0.0)
+
+        # IHACRES 的纯延迟核按整数 lag 位置分配权重，不能使用半步采样。
+        t_idx = torch.arange(
+            1, self.max_lag + 1, device=t_delay.device, dtype=t_delay.dtype
+        ).view(1, 1, -1)
+
         center = t_delay + 1.0
-        
-        # 广播计算: |t_idx - center|
-        # (1, 1, L) - (B, 1, 1) -> (B, 1, L)
-        dist = torch.abs(self.t_idx.to(t_delay.device) - center.unsqueeze(-1))
-        
-        # 4. 线性插值核 (Triangular Kernel / Linear Interpolation)
-        # 公式: max(0, 1 - dist)
-        # 当 dist=0 (正中) -> 1
-        # 当 dist=0.2 -> 0.8
-        # 当 dist=0.8 -> 0.2
-        # 当 dist>=1 -> 0
+        dist = torch.abs(t_idx - center.unsqueeze(-1))
         weights = F.relu(1.0 - dist)
-        
-        # 理论上这个 Kernel 的 sum 恒等于 1 (只要 peak 不移出边界)
-        # 但基类 DplUHBase 会再次执行归一化，双重保险
         return weights

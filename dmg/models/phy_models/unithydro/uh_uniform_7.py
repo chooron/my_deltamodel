@@ -17,20 +17,16 @@ class DplUniform7(DplUHBase):
     """
     
     def get_weights(self, params):
-        # 1. 获取参数 d_base
         d_base = torch.clamp(params, min=1e-3)
-        
-        # 2. 计算比率 t / d_base
-        # (1,1,L) / (B,1,1) -> (B,1,L)
-        ratio = self.t_idx.to(d_base.device) / d_base.unsqueeze(-1)
-        
-        # 3. 计算 S-Curve
-        # 线性斜坡，最大值为 1.0
+
+        # MATLAB uh_7_uniform 按整步边界计算，使用 t=1,2,...
+        t_idx = torch.arange(
+            1, self.max_lag + 1, device=d_base.device, dtype=d_base.dtype
+        ).view(1, 1, -1)
+
+        ratio = t_idx / d_base.unsqueeze(-1)
         s_curve = torch.clamp(ratio, max=1.0)
-        
-        # 4. 差分计算权重
-        # UH(t) = S(t) - S(t-1)
         s_curve_padded = F.pad(s_curve, (1, 0), value=0.0)
         weights = s_curve - s_curve_padded[..., :-1]
-        
+
         return weights

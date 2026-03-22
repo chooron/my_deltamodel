@@ -27,11 +27,12 @@ COLLIE_PARAMS_DESC = {
     "lambda_par": "Flow distribution parameter [-]",
 }
 
+
 def create_initial_state(
-    n_grid: int, 
-    nmul: int, 
-    device: torch.device, 
-    nearzero: float = 1e-6
+    n_grid: int,
+    nmul: int,
+    device: torch.device,
+    nearzero: float = 1e-6,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Create initial states for Collie3 model.
@@ -40,7 +41,7 @@ def create_initial_state(
     S2 = torch.zeros((n_grid, nmul), device=device) + nearzero
     return S1, S2
 
-# todo collie3 精度偏低
+
 def collie3_step(
     P: torch.Tensor,
     T: torch.Tensor,
@@ -58,50 +59,54 @@ def collie3_step(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Collie River v3 model single step calculation.
-    """
-    # 1) Saturation excess runoff from the top store
-    flux_qse = saturation_1(P, S1, smax, nearzero=nearzero)
-    flux_qse = torch.clamp(flux_qse, min=torch.zeros_like(flux_qse), max=P)
-    S1_tmp = torch.clamp(S1 + P - flux_qse, min=nearzero)
 
-    # 2) Evapotranspiration split into bare soil and vegetation components
+    Uses the same explicit-discretization style as the rest of the PyTorch
+    core models, but removes the systematic "leave nearzero behind" leakage
+    that was biasing the multi-store water balance.
+    """
+    zeros = torch.zeros_like(P)
+    S1 = F.relu(S1)
+    S2 = F.relu(S2)
+
+    # 1) Saturation excess runoff from the top store.
+    flux_qse = saturation_1(P, S1, smax, nearzero=nearzero)
+    flux_qse = torch.clamp(flux_qse, min=zeros, max=P)
+    S1_tmp = torch.clamp(S1 + P - flux_qse, min=0.0)
+
+    # 2) Evapotranspiration split into bare soil and vegetation components.
     pet_bare = (1.0 - m) * PET
     pet_veg = m * PET
     flux_eb = evap_7(S1_tmp, smax, pet_bare, nearzero=nearzero)
     flux_ev = evap_3(fc, S1_tmp, smax, pet_veg, nearzero=nearzero)
 
     flux_ea_total = flux_eb + flux_ev
-    flux_ea_total = torch.minimum(flux_ea_total, S1_tmp - nearzero)
+    flux_ea_total = torch.minimum(flux_ea_total, S1_tmp)
     flux_ea_total = torch.minimum(flux_ea_total, PET)
     flux_ea_total = F.relu(flux_ea_total)
+    S1_tmp2 = torch.clamp(S1_tmp - flux_ea_total, min=0.0)
 
-    S1_tmp2 = torch.clamp(S1_tmp - flux_ea_total, min=nearzero)
-
-    # 3) Interflow from the top store
+    # 3) Non-linear interflow from the top store.
     sfc_mm = fc * smax
     flux_qss = interflow_9(S1_tmp2, a, sfc_mm, b, nearzero=nearzero)
-    flux_qss = torch.minimum(flux_qss, S1_tmp2 - nearzero)
+    flux_qss = torch.minimum(flux_qss, S1_tmp2)
     flux_qss = F.relu(flux_qss)
+    S1_new = torch.clamp(S1_tmp2 - flux_qss, min=0.0)
 
-    S1_new = torch.clamp(S1_tmp2 - flux_qss, min=nearzero)
-
-    # 4) Split interflow between groundwater and direct flow
+    # 4) Split interflow exactly, so qss = qsss + qss_direct by construction.
     flux_qsss = split_1(lambda_par, flux_qss)
-    flux_qss_direct = split_1(1.0 - lambda_par, flux_qss)
+    flux_qss_direct = flux_qss - flux_qsss
 
-    # 5) Groundwater store update and baseflow
-    S2_tmp = torch.clamp(S2 + flux_qsss, min=nearzero)
+    # 5) Groundwater store update and non-linear baseflow.
+    S2_tmp = torch.clamp(S2 + flux_qsss, min=0.0)
     inv_a = 1.0 / (a + nearzero)
     inv_b = 1.0 / (b + nearzero)
     flux_qsg = baseflow_2(S2_tmp, inv_a, inv_b, nearzero=nearzero)
-    flux_qsg = torch.minimum(flux_qsg, S2_tmp - nearzero)
+    flux_qsg = torch.minimum(flux_qsg, S2_tmp)
     flux_qsg = F.relu(flux_qsg)
+    S2_new = torch.clamp(S2_tmp - flux_qsg, min=0.0)
 
-    S2_new = torch.clamp(S2_tmp - flux_qsg, min=nearzero)
-
-    # 6) Aggregate outputs
+    # 6) Aggregate outputs.
     Q = flux_qse + flux_qss_direct + flux_qsg
     Ea = flux_ea_total
 
     return Q, Ea, S1_new, S2_new
-

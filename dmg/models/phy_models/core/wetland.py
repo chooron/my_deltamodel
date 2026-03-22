@@ -60,40 +60,24 @@ def wetland_step(
     flux_pe = interception_2(P, dw, nearzero=nearzero)
     flux_ei = F.relu(P - flux_pe)
 
-    # 2. 产流计算 (Saturation excess)
-    # 基于当前状态计算饱和超渗产流
-    # flux_qwsof = saturation_2(S1, swmax, betaw, flux_pe)
+    # 2. 所有通量基于原始 S1 计算 (与 MATLAB ODE 一致)
     flux_qwsof = saturation_2(S1, swmax, betaw, flux_pe, nearzero=nearzero)
-    zeros = torch.zeros_like(flux_qwsof)
-    flux_qwsof = torch.clamp(flux_qwsof, min=zeros, max=flux_pe)
+    flux_ew    = evap_1(S1, PET, nearzero=nearzero)
+    flux_qwgw  = baseflow_1(kw, S1, nearzero=nearzero)
 
-    # 3. 状态预更新 (用于蒸发和底流计算)
-    S1_tmp = S1 + flux_pe - flux_qwsof
-    S1_tmp = torch.clamp(S1_tmp, min=nearzero)
+    # 3. 限制总出流不超过可用水量，按比例缩放
+    avail = S1 + flux_pe
+    total_out = flux_ew + flux_qwsof + flux_qwgw
+    scale = torch.clamp(avail / (total_out + nearzero), max=1.0)
+    flux_ew    = F.relu(flux_ew    * scale)
+    flux_qwsof = F.relu(flux_qwsof * scale)
+    flux_qwgw  = F.relu(flux_qwgw  * scale)
 
-    # 4. 蒸发计算 (Soil evaporation)
-    # flux_ew = evap_1(S1, PET)
-    flux_ew = evap_1(S1_tmp, PET, nearzero=nearzero)
-
-    # 限制蒸发量以确保质量守恒
-    flux_ew = torch.minimum(flux_ew, S1_tmp - nearzero)
-    flux_ew = torch.minimum(flux_ew, PET)
-    flux_ew = F.relu(flux_ew)
-
-    # 5. 底流计算 (Baseflow)
-    # flux_qwgw = baseflow_1(kw, S1)
-    S1_tmp2 = S1_tmp - flux_ew
-    S1_tmp2 = torch.clamp(S1_tmp2, min=nearzero)
-
-    flux_qwgw = baseflow_1(kw, S1_tmp2, nearzero=nearzero)
-    flux_qwgw = torch.minimum(flux_qwgw, S1_tmp2 - nearzero)
-    flux_qwgw = F.relu(flux_qwgw)
-
-    # 6. 更新最终状态
-    S1_new = S1_tmp2 - flux_qwgw
+    # 4. 更新状态
+    S1_new = avail - flux_ew - flux_qwsof - flux_qwgw
     S1_new = torch.clamp(S1_new, min=nearzero)
 
-    # 7. 变量聚合与返回
+    # 5. 变量聚合与返回
     # Ea = ei (拦截蒸发) + ew (土壤蒸发)
     # Qsim = qwsof (地表产流) + qwgw (地底产流/底流)
     Ea = flux_ei + flux_ew

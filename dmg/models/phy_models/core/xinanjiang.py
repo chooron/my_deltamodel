@@ -119,44 +119,22 @@ def xinanjiang_step(
     S1_new = torch.clamp(S1_new, min=0.0)
 
     # --------------------------------------------------------------------------
-    # 3. 自由水 (S2) - 顺序分流 (核心修改)
+    # 3. 自由水 (S2) - 基于原始 S2 计算所有通量 (与 MATLAB ODE 一致)
     # --------------------------------------------------------------------------
-    # 第一步：接收水源 R
-    # S2_curr 代表当前时刻 S2 里的“剩余可用水量”
-    S2_curr = S2 + flux_r
+    # MATLAB: flux_rs/ri/rg 均基于原始 S2，incoming flux 分别为 flux_r / S2*ki / S2*kg
+    flux_rs = saturation_2(S2, smax, ex, flux_r,    nearzero)
+    flux_ri = saturation_2(S2, smax, ex, S2 * ki,   nearzero)
+    flux_rg = saturation_2(S2, smax, ex, S2 * kg,   nearzero)
 
-    # --- 优先级 1: 地表径流 (Rs) ---
-    # 物理意义：水位超过蓄满产流，首先溢出
-    flux_rs = saturation_2(S2_curr, smax, ex, flux_r, nearzero)
-    # [关键] 限制：Rs 不能超过 S2 当前所有水
-    flux_rs = torch.minimum(flux_rs, S2_curr)
-    
-    # [扣除] 更新剩余水量
-    S2_curr = S2_curr - flux_rs
+    # 限制总出流不超过可用水量 (S2 + flux_r)，按比例缩放
+    avail_s2  = S2 + flux_r
+    total_s2  = flux_rs + flux_ri + flux_rg
+    scale_s2  = torch.clamp(avail_s2 / (total_s2 + nearzero), max=1.0)
+    flux_rs   = F.relu(flux_rs * scale_s2)
+    flux_ri   = F.relu(flux_ri * scale_s2)
+    flux_rg   = F.relu(flux_rg * scale_s2)
 
-    # --- 优先级 2: 壤中流 (Ri) ---
-    # 物理意义：剩余的水发生侧向流动
-    # 注意：这里的驱动项是用 原始S2 还是 S2_curr? 
-    # 为了守恒，必须基于 S2_curr (或者受限于 S2_curr)
-    # 这里我们计算潜在能力，然后用 min(S2_curr) 限制
-    # 为了保持模型原义，如果 saturation_2 需要 S2 作为状态，这里用 S2_curr 最安全
-    flux_ri = saturation_2(S2_curr, smax, ex, S2_curr * ki, nearzero)
-    # [关键] 限制：不能超过剩余的 S2
-    flux_ri = torch.minimum(flux_ri, S2_curr)
-    
-    # [扣除] 更新剩余水量
-    S2_curr = S2_curr - flux_ri
-
-    # --- 优先级 3: 地下径流 (Rg) ---
-    # 物理意义：最后剩下的水发生深层下渗
-    flux_rg = saturation_2(S2_curr, smax, ex, S2_curr * kg, nearzero)
-    # [关键] 限制：不能超过仅剩的 S2
-    flux_rg = torch.minimum(flux_rg, S2_curr)
-    
-    # [扣除] 更新剩余水量 (这就成了 S2_new)
-    S2_new = S2_curr - flux_rg
-    
-    # 最后的保险，防止浮点误差
+    S2_new = avail_s2 - flux_rs - flux_ri - flux_rg
     S2_new = torch.clamp(S2_new, min=0.0)
 
     # --------------------------------------------------------------------------
