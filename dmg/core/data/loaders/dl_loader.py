@@ -9,7 +9,10 @@ import pandas as pd
 import torch
 from dotenv import load_dotenv
 from numpy.typing import NDArray
-from sklearn.exceptions import DataDimensionalityWarning
+
+
+class DataDimensionalityWarning(ValueError):
+    """Raised when loader normalization receives unsupported data rank."""
 
 load_dotenv()
 from dmg.core.data.data import intersect

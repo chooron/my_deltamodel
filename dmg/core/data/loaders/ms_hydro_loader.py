@@ -8,7 +8,10 @@ import pandas as pd
 import torch
 import zarr
 from numpy.typing import NDArray
-from sklearn.exceptions import DataDimensionalityWarning
+
+
+class DataDimensionalityWarning(ValueError):
+    """Raised when loader normalization receives unsupported data rank."""
 
 from dmg.core.data.loaders.base import BaseLoader
 
