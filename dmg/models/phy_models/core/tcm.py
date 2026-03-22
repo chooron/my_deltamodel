@@ -119,6 +119,7 @@ def tcm_step(
 
     MATLAB reference: m_25_tcm_6p_4s
     - fa is fraction of mean(P) forming abstraction rate: ca = fa * mean(P)
+    - mean_P should be pre-computed from the entire precipitation time series
     - S2 is a deficit store (StoreSigns = -1): increases with ET, decreases with qex1
     - flux_qex2 uses saturation_9: passes qex1 through when S2 deficit is near zero
 
@@ -139,11 +140,14 @@ def tcm_step(
     flux_pin = flux_pn - flux_pby
 
     # --- 2. Upper Store (S1) ---
+    # In MATLAB ODE: dS1 = flux_pin - flux_ea - flux_qex1
+    # Sequential: add flux_pin first, then compute saturation excess
     S1 = S1 + flux_pin
 
-    # Saturation overflow from S1
-    flux_qex1 = saturation_1(torch.zeros_like(S1), S1, rc, nearzero=nearzero)
-    flux_qex1 = torch.clamp(flux_qex1, min=zeros, max=S1)
+    # Saturation overflow: saturation_1(flux_pin, S1, rc)
+    # When S1 approaches rc, excess water flows out
+    flux_qex1 = saturation_1(flux_pin, S1, rc, nearzero=nearzero)
+    flux_qex1 = torch.minimum(flux_qex1, S1)
     S1 = S1 - flux_qex1
 
     # Evap from S1
