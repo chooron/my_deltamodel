@@ -47,7 +47,7 @@ class Tcm(UnifyV1):
         # Compute mean_P from the entire precipitation time series
         # This matches MATLAB's init() function: ca = fa * mean(P)
         P_all = forcing[..., 0]  # shape: (n_steps, n_grid)
-        mean_P = P_all.mean(dim=0, keepdim=True)  # shape: (1, n_grid)
+        mean_P = P_all.mean(dim=0, keepdim=False).unsqueeze(-1)  # shape: (n_grid, 1)
 
         # Expand mean_P to match nmul
         mean_P_expanded = mean_P.expand(n_grid, nmul)  # shape: (n_grid, nmul)
