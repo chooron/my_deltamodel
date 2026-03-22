@@ -50,9 +50,14 @@ delta_model:
     - pet
     hidden_size: 64
     model: Calibrate
+    lr_scheduler: CosineAnnealingWarmRestarts
+    lr_scheduler_params:
+      T_0: 50
+      T_mult: 1
+      eta_min: 0.00001
   phy_model:
     attributes: []
-    directory: /workspace/my_deltamodel/dmg/models/phy_models/specialv1
+    directory: /home/oem/jingxin/my_deltamodel/dmg/models/phy_models/specialv1
     dy_drop: 0.0
     forcings:
     - prcp
@@ -84,7 +89,7 @@ test:
   - kge
   split_dataset: false
   start_time: 1999/01/01
-  test_epoch: 100
+  test_epoch: 200
 train:
   batch_size: 100
   end_time: 1998/12/31
@@ -96,15 +101,15 @@ train:
     T_mult: 1
     eta_min: 0.00001
   optimizer: Adam
-  save_epoch: 20
+  save_epoch: 50
   start_epoch: 0
   start_time: 1989/01/01
   target:
   - streamflow
   log_interval: 1
-  elite_reset_interval: 15
-  elite_reset_start: 10
-  elite_reset_end: 180
+  elite_reset_interval: 50   # 与 T_0 对齐，每个余弦周期末触发一次
+  elite_reset_start: 45      # 第1周期末（45~50之间）
+  elite_reset_end: 175       # 最后一次在第4周期中段
   elite_threshold_ratio: 0.25
   elite_ratio: 0.10
 trained_model: project/diff_compare/output/model/
