@@ -383,7 +383,7 @@ class NewTrainer(BaseTrainer):
                         key: tensor[warmup_length:, ...].cpu().detach()
                         if tensor.shape[0] > warmup_length
                         else tensor.cpu().detach()
-                        for key, tensor in prediction_window[model_name].items()
+                        for key, tensor in prediction_window.items()
                     }
                     prediction_time_chunks.append(prediction_valid_part)
                 collated_chunks = {key: [] for key in prediction_time_chunks[0]}
@@ -399,7 +399,7 @@ class NewTrainer(BaseTrainer):
                 prediction = self.model(dataset_sample, eval=True)
                 prediction = {
                     key: tensor.cpu().detach()
-                    for key, tensor in prediction[model_name].items()
+                    for key, tensor in prediction.items()
                 }
                 batch_predictions.append(prediction)
         return batch_predictions

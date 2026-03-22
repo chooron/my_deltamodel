@@ -35,11 +35,10 @@ def update_yaml_with_alpha(config_path: str, alpha: float) -> None:
         yaml.safe_dump(config_yaml, f, allow_unicode=True, sort_keys=False)
 
 
-# if len(sys.argv) < 2:
-#     raise ValueError('请传入 alpha 参数，例如: python run_model.py 0.1')
+if len(sys.argv) < 2:
+    raise ValueError('请传入 alpha 参数，例如: python run_model.py 0.1')
 
-# alpha = float(sys.argv[1])
-alpha = 0.1
+alpha = float(sys.argv[1])
 update_yaml_with_alpha(
     os.path.join(os.getenv("PROJ_PATH", ""), "project/flex_mopex", CONFIG_PATH),
     alpha,
