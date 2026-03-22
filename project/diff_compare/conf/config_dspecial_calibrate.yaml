@@ -84,7 +84,7 @@ test:
   - kge
   split_dataset: false
   start_time: 1999/01/01
-  test_epoch: 100
+  test_epoch: 200
 train:
   batch_size: 100
   end_time: 1998/12/31

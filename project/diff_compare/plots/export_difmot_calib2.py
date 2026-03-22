@@ -11,7 +11,7 @@ load_dotenv()
 # ==========================================
 RESULT_PATH = (
     "/workspace/my_deltamodel/project/diff_compare/output/camels_559/"
-    "train1989-1998/no_multi/Calibrate_E100_R365_B100_n20_noLn_noWU_42"
+    "train1989-1998/no_multi/Calibrate_E200_R365_B100_n20_noLn_noWU_42"
 )
 OUTPUT_TEST_CSV_NAME  = f"{os.path.dirname(os.path.abspath(__file__))}/csv/dif_test_kge2.csv"
 OUTPUT_TRAIN_CSV_NAME = f"{os.path.dirname(os.path.abspath(__file__))}/csv/dif_train_kge2.csv"
@@ -83,7 +83,7 @@ def get_model_results(model_name: str):
     def _path(period_dir):
         return os.path.join(
             RESULT_PATH, model_name, LOSS_NAME,
-            "stat", f"{period_dir}_Ep100", "metrics.json"
+            "stat", f"{period_dir}_Ep200", "metrics.json"
         )
 
     train_path = _path(TRAIN_DIR)
@@ -103,10 +103,24 @@ def get_model_results(model_name: str):
         print(f"  [Skip] {model_name}: all-NaN.")
         return None, None
 
-    best_idx      = np.nanargmax(train_data, axis=1)
-    row_idx       = np.arange(N_BASINS)
-    train_results = train_data[row_idx, best_idx]
-    test_results  = test_data[row_idx, best_idx]
+    # np.nanargmax 会在任意一行全 NaN 时抛 ValueError，这里按行容错。
+    valid_row_mask = ~np.isnan(train_data).all(axis=1)
+    invalid_count = int((~valid_row_mask).sum())
+    if invalid_count > 0:
+        print(f"  [Warn] {model_name}: {invalid_count}/{N_BASINS} basins are all-NaN in train metrics.")
+
+    row_idx = np.arange(N_BASINS)
+    train_results = np.full(N_BASINS, np.nan, dtype=float)
+    test_results = np.full(N_BASINS, np.nan, dtype=float)
+
+    if valid_row_mask.any():
+        valid_rows = row_idx[valid_row_mask]
+        best_idx_valid = np.nanargmax(train_data[valid_row_mask], axis=1)
+        train_results[valid_rows] = train_data[valid_rows, best_idx_valid]
+        test_results[valid_rows] = test_data[valid_rows, best_idx_valid]
+    else:
+        print(f"  [Skip] {model_name}: no valid basin rows after filtering all-NaN rows.")
+        return None, None
 
     return train_results, test_results
 
@@ -153,13 +167,20 @@ def main():
     print(f"Found {len(model_list)} model folders.\n")
 
     train_dict, test_dict = {}, {}
+    failed_models = []
     for model in model_list:
-        tr, te = get_model_results(model)
-        if tr is not None:
-            train_dict[model.lower()] = tr
-            test_dict[model.lower()]  = te
+        try:
+            tr, te = get_model_results(model)
+            if tr is not None:
+                train_dict[model.lower()] = tr
+                test_dict[model.lower()]  = te
+        except Exception as e:
+            failed_models.append(model)
+            print(f"  [Error] {model}: {e}")
 
     print(f"\nValid models extracted: {len(test_dict)}")
+    if failed_models:
+        print(f"  [Summary] Failed models ({len(failed_models)}): {failed_models}")
     if not test_dict:
         print("Error: No valid data.")
         return
