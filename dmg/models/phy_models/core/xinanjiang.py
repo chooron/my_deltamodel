@@ -119,23 +119,22 @@ def xinanjiang_step(
     S1_new = torch.clamp(S1_new, min=0.0)
 
     # --------------------------------------------------------------------------
-    # 3. 自由水 (S2) - 基于原始 S2 计算所有通量 (与 MATLAB ODE 一致)
+    # 3. 自由水 (S2) - 顺序显式步进
     # --------------------------------------------------------------------------
-    # MATLAB: flux_rs/ri/rg 均基于原始 S2，incoming flux 分别为 flux_r / S2*ki / S2*kg
-    flux_rs = saturation_2(S2, smax, ex, flux_r,    nearzero)
-    flux_ri = saturation_2(S2, smax, ex, S2 * ki,   nearzero)
-    flux_rg = saturation_2(S2, smax, ex, S2 * kg,   nearzero)
+    # flux_rs: 饱和超渗，状态用原始 S2（flux_r 是本步输入，尚未加入）
+    flux_rs = saturation_2(S2, smax, ex, flux_r, nearzero)
+    S2_curr = F.relu(S2 + flux_r - flux_rs)
 
-    # 限制总出流不超过可用水量 (S2 + flux_r)，按比例缩放
-    avail_s2  = S2 + flux_r
-    total_s2  = flux_rs + flux_ri + flux_rg
-    scale_s2  = torch.clamp(avail_s2 / (total_s2 + nearzero), max=1.0)
-    flux_rs   = F.relu(flux_rs * scale_s2)
-    flux_ri   = F.relu(flux_ri * scale_s2)
-    flux_rg   = F.relu(flux_rg * scale_s2)
+    # flux_ri: 壤中流，基于更新后的 S2_curr
+    flux_ri = saturation_2(S2_curr, smax, ex, S2_curr * ki, nearzero)
+    flux_ri = torch.minimum(flux_ri, S2_curr)
+    S2_curr = S2_curr - flux_ri
 
-    S2_new = avail_s2 - flux_rs - flux_ri - flux_rg
-    S2_new = torch.clamp(S2_new, min=0.0)
+    # flux_rg: 地下径流，基于再次更新后的 S2_curr
+    flux_rg = saturation_2(S2_curr, smax, ex, S2_curr * kg, nearzero)
+    flux_rg = torch.minimum(flux_rg, S2_curr)
+
+    S2_new = torch.clamp(S2_curr - flux_rg, min=0.0)
 
     # --------------------------------------------------------------------------
     # 4. 汇流 (S3, S4)

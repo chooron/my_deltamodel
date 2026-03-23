@@ -5,7 +5,8 @@
       "Bash(find /workspace/my_deltamodel/dmg/models/MARRMoT -type f -name *.m)",
       "Bash(find e:/DockerCode/my_deltamodel/dmg/models/MARRMoT -name smoothThreshold*)",
       "Bash(find e:/DockerCode/my_deltamodel/dmg/models/MARRMoT -name *.m)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(grep -n \"get_s_curve\\\\|get_weights\" /workspace/my_deltamodel/dmg/models/phy_models/unithydro/*.py)"
     ]
   }
 }

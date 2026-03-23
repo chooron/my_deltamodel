@@ -219,78 +219,69 @@ class Flexb(UnifyV1):
 
         S1, S2, S3 = states
         warm_up = min(self.warm_up, n_steps)
+        B_total = n_grid * nmul
+        nlagf_flat = nlagf.reshape(B_total, 1)
+        nlags_flat = nlags.reshape(B_total, 1)
+
+        # ==========================================================
+        # Phase 1: Production Loop (warm_up + training, full sequence)
+        # ==========================================================
+        all_rf_list = []
+        all_slow_list = []
 
         with torch.no_grad():
-            wu_rf_list = []
-            wu_slow_list = []
             for t in range(warm_up):
                 flux_rf_wu, flux_slow_wu, _, S1 = self.production_step(
                     P_seq[t], PET_seq[t], S1,
                     s1max, beta, d_split, percmax, lp, nearzero)
-                wu_rf_list.append(flux_rf_wu)
-                wu_slow_list.append(flux_slow_wu)
+                all_rf_list.append(flux_rf_wu)
+                all_slow_list.append(flux_slow_wu)
 
-            if warm_up > 0:
-                B_total_wu = n_grid * nmul
-                wu_rf_flat = torch.stack(wu_rf_list, dim=0).permute(1, 2, 0).reshape(B_total_wu, warm_up)
-                wu_slow_flat = torch.stack(wu_slow_list, dim=0).permute(1, 2, 0).reshape(B_total_wu, warm_up)
-                wu_rfl = self.uh_fast(wu_rf_flat, nlagf.reshape(B_total_wu, 1))
-                wu_rsl = self.uh_slow(wu_slow_flat, nlags.reshape(B_total_wu, 1))
-                wu_rfl_seq = wu_rfl.view(n_grid, nmul, warm_up).permute(2, 0, 1).unbind(0)
-                wu_rsl_seq = wu_rsl.view(n_grid, nmul, warm_up).permute(2, 0, 1).unbind(0)
-                for t in range(warm_up):
-                    _, S2, S3 = self.routing_step(wu_rfl_seq[t], wu_rsl_seq[t], S2, S3, kf, ks, nearzero)
-
-        S1, S2, S3 = S1.detach(), S2.detach(), S3.detach()
-
-        # ==========================================================
-        # Phase 1: Production Loop
-        # ==========================================================
-        raw_rf_list = []
-        raw_slow_list = []
+        S1 = S1.detach()
 
         for t in range(n_steps):
-            flux_rf, flux_slow_in, flux_eur, S1 = self.production_step(
+            flux_rf, flux_slow_in, _, S1 = self.production_step(
                 P_seq[t], PET_seq[t], S1,
-                s1max, beta, d_split, percmax, lp,
-                nearzero
-            )
-            raw_rf_list.append(flux_rf)
-            raw_slow_list.append(flux_slow_in)
+                s1max, beta, d_split, percmax, lp, nearzero)
+            all_rf_list.append(flux_rf)
+            all_slow_list.append(flux_slow_in)
 
-        # Stack: (T, B, M)
-        rf_stack = torch.stack(raw_rf_list, dim=0)
-        slow_stack = torch.stack(raw_slow_list, dim=0)
+        # Stack full sequence: (warm_up + n_steps, B, M)
+        T_full = warm_up + n_steps
+        rf_stack = torch.stack(all_rf_list, dim=0)
+        slow_stack = torch.stack(all_slow_list, dim=0)
 
         # ==========================================================
-        # Phase 2: Parallel Convolution (Fast & Slow)
+        # Phase 2: Parallel Convolution over full sequence
+        # UH sees continuous flux history — no carry-over loss
         # ==========================================================
-        B_total = n_grid * nmul
-        rf_flat = rf_stack.permute(1, 2, 0).reshape(B_total, n_steps)
-        slow_flat = slow_stack.permute(1, 2, 0).reshape(B_total, n_steps)
-        nlagf_flat = nlagf.reshape(B_total, 1)
-        nlags_flat = nlags.reshape(B_total, 1)
+        rf_flat = rf_stack.permute(1, 2, 0).reshape(B_total, T_full)
+        slow_flat = slow_stack.permute(1, 2, 0).reshape(B_total, T_full)
 
         routed_rf_flat = self.uh_fast(rf_flat, nlagf_flat)
         routed_slow_flat = self.uh_slow(slow_flat, nlags_flat)
 
-        rfl_seq = routed_rf_flat.view(n_grid, nmul, n_steps).permute(2, 0, 1).unbind(0)
-        rsl_seq = routed_slow_flat.view(n_grid, nmul, n_steps).permute(2, 0, 1).unbind(0)
+        # Slice off warm_up portion, keep only training steps
+        rfl_seq = routed_rf_flat[:, warm_up:].view(n_grid, nmul, n_steps).permute(2, 0, 1).unbind(0)
+        rsl_seq = routed_slow_flat[:, warm_up:].view(n_grid, nmul, n_steps).permute(2, 0, 1).unbind(0)
+
+        # Warm up routing stores using warm_up portion of routed fluxes
+        with torch.no_grad():
+            rfl_wu = routed_rf_flat[:, :warm_up].view(n_grid, nmul, warm_up).permute(2, 0, 1).unbind(0)
+            rsl_wu = routed_slow_flat[:, :warm_up].view(n_grid, nmul, warm_up).permute(2, 0, 1).unbind(0)
+            for t in range(warm_up):
+                _, S2, S3 = self.routing_step(rfl_wu[t], rsl_wu[t], S2, S3, kf, ks, nearzero)
+
+        S2, S3 = S2.detach(), S3.detach()
 
         # ==========================================================
-        # Phase 3: Routing Loop (S2, S3)
+        # Phase 3: Routing Loop (S2, S3) — training steps only
         # ==========================================================
         Qsim_list = []
-
         for t in range(n_steps):
             Qsim, S2, S3 = self.routing_step(
-                rfl_seq[t], rsl_seq[t], S2, S3,
-                kf, ks,
-                nearzero
-            )
+                rfl_seq[t], rsl_seq[t], S2, S3, kf, ks, nearzero)
             Qsim_list.append(Qsim)
 
         Qsim_out = torch.stack(Qsim_list, dim=0)
-
-        warm_up = min(self.warm_up, n_steps)
-        return {"streamflow": Qsim_out[warm_up:].flatten(start_dim=1)}
+        return {"streamflow": Qsim_out.flatten(start_dim=1)}
