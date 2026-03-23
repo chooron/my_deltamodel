@@ -148,16 +148,7 @@ class Ihacres(UnifyV1):
         raw_uq_list = []
         raw_us_list = []
 
-        with torch.no_grad():
-            for t in range(warm_up):
-                flux_uq, flux_us, _, S1 = self.production_step(
-                    P_seq[t], PET_seq[t], S1, lp, d, p, alpha, nearzero
-                )
-                raw_uq_list.append(flux_uq)
-                raw_us_list.append(flux_us)
-        S1 = S1.detach()
-
-        for t in range(warm_up, n_steps):
+        for t in range(n_steps):
             flux_uq, flux_us, _, S1 = self.production_step(
                 P_seq[t], PET_seq[t], S1, lp, d, p, alpha, nearzero
             )
