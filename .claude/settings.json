@@ -6,7 +6,11 @@
       "Bash(find e:/DockerCode/my_deltamodel/dmg/models/MARRMoT -name smoothThreshold*)",
       "Bash(find e:/DockerCode/my_deltamodel/dmg/models/MARRMoT -name *.m)",
       "Bash(xargs grep:*)",
-      "Bash(grep -n \"get_s_curve\\\\|get_weights\" /workspace/my_deltamodel/dmg/models/phy_models/unithydro/*.py)"
+      "Bash(grep -n \"get_s_curve\\\\|get_weights\" /workspace/my_deltamodel/dmg/models/phy_models/unithydro/*.py)",
+      "Bash(head -30 grep -n \"split_dataset\\\\|rho\\\\|warm_up\" /workspace/my_deltamodel/project/diff_compare/conf/config_dspecial_calibrate.yaml)",
+      "Bash(tail -20 echo \"---\" grep -n \"warm_up\\\\|n_steps\\\\|Qsim_out\\\\|return\" /workspace/my_deltamodel/dmg/models/phy_models/specialv1/flexi.py)",
+      "Bash(tail -20 echo \"---\" grep -n \"warm_up\\\\|n_steps\\\\|Qsim_out\\\\|return\" /workspace/my_deltamodel/dmg/models/phy_models/specialv1/flexis.py)",
+      "Bash(head -20 grep -n \"warm_up\\\\|Qsim_out\\\\|return.*streamflow\\\\|n_steps\" /workspace/my_deltamodel/dmg/models/phy_models/core/gr4j.py)"
     ]
   }
 }
