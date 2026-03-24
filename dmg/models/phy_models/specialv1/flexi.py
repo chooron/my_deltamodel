@@ -70,7 +70,8 @@ def _flexi_production_step_impl(
     # Using MARRMoT defaults: r=0.01, e=5.0
     _r, _e = 0.01, 5.0
     _imax_safe = torch.abs(imax) + nearzero
-    _sf = torch.sigmoid((S1 - imax + _r * _e * _imax_safe) / (_r * _imax_safe))
+    # MATLAB: sigmoid((S - Smax*(1-r)) / (r*e*Smax)) = sigmoid(20*(S/Smax - 0.99))
+    _sf = torch.sigmoid((S1 - imax + _r * _imax_safe) / (_r * _e * _imax_safe))
     flux_peff = torch.clamp(P * (1.0 - _sf), min=torch.zeros_like(P), max=P)
 
     # Sequential update: S1 receives P, loses peff

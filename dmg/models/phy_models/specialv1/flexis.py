@@ -8,7 +8,6 @@ from dmg.models.phy_models.unify_v1 import UnifyV1
 from dmg.models.phy_models.flux.snowfall import snowfall_1
 from dmg.models.phy_models.flux.rainfall import rainfall_1
 from dmg.models.phy_models.flux.melt import melt_1
-from dmg.models.phy_models.flux.interception import interception_1
 from dmg.models.phy_models.flux.evap import evap_1, evap_3
 from dmg.models.phy_models.flux.saturation import saturation_3
 from dmg.models.phy_models.flux.percolation import percolation_2
@@ -101,9 +100,13 @@ def _flexis_production_step_impl(
     # Inflow to S2 is melt + rainfall
     inflow_S2 = flux_m + flux_pi
 
-    flux_peff = interception_1(inflow_S2, S2, imax, nearzero=nearzero)
-    zeros = torch.zeros_like(flux_peff)
-    flux_peff = torch.clamp(flux_peff, min=zeros, max=inflow_S2)
+    # MATLAB: interception_1 uses smoothThreshold_storage_logistic(S2, imax, r=0.01, e=5.0)
+    # = sigmoid((S2 - imax*(1-r)) / (r*e*imax)) = sigmoid(20*(S2/imax - 0.99))
+    _r, _e = 0.01, 5.0
+    _imax_safe = torch.abs(imax) + nearzero
+    _sf_ic = torch.sigmoid((S2 - imax + _r * _imax_safe) / (_r * _e * _imax_safe))
+    zeros = torch.zeros_like(inflow_S2)
+    flux_peff = torch.clamp(inflow_S2 * (1.0 - _sf_ic), min=zeros, max=inflow_S2)
 
     S2_tmp = S2 + inflow_S2 - flux_peff
     S2_tmp = torch.clamp(S2_tmp, min=nearzero)
